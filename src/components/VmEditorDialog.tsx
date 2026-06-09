@@ -121,8 +121,8 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(560px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded border border-slate-200 bg-white p-4 shadow-2xl">
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/30" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(560px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded border border-slate-200 bg-white p-4 shadow-xl">
           <div className="mb-4 flex items-start justify-between gap-3">
             <div>
               <Dialog.Title className="text-base font-semibold text-slate-950">
@@ -145,7 +145,7 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
                   onChange={(event) => updateField('ipAddress', event.target.value)}
                   autoFocus
                   placeholder="192.168.1.20"
-                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-cyan-400"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
                 />
               </Field>
               <Field label="Port" required>
@@ -156,7 +156,7 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
                   inputMode="numeric"
                   min={1}
                   max={65535}
-                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-cyan-400"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
                 />
               </Field>
             </div>
@@ -166,7 +166,7 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
                 value={form.pemPath}
                 onChange={(event) => updateField('pemPath', event.target.value)}
                 placeholder="keys/example.pem"
-                className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-cyan-400"
+                className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
               />
             </Field>
 
@@ -176,7 +176,7 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
                   value={form.name}
                   onChange={(event) => updateField('name', event.target.value)}
                   placeholder="remote-build-01"
-                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-cyan-400"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
                 />
               </Field>
               <Field label="SSH user">
@@ -184,7 +184,7 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
                   value={form.user}
                   onChange={(event) => updateField('user', event.target.value)}
                   placeholder="root"
-                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-cyan-400"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
                 />
               </Field>
               <Field label="OS">
@@ -192,7 +192,7 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
                   value={form.os}
                   onChange={(event) => updateField('os', event.target.value)}
                   placeholder="Linux"
-                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-cyan-400"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
                 />
               </Field>
             </div>
@@ -203,7 +203,7 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
-                className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                className="h-8 rounded border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
               >
                 Cancel
               </button>

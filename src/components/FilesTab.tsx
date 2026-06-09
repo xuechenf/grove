@@ -45,7 +45,7 @@ interface FilePaneProps {
 
 function FileIcon({ type }: { type: FileNode['type'] }) {
   return type === 'folder' ? (
-    <Folder className="h-4 w-4 text-amber-500" aria-hidden="true" />
+    <Folder className="h-4 w-4 text-slate-500" aria-hidden="true" />
   ) : (
     <FileText className="h-4 w-4 text-slate-400" aria-hidden="true" />
   )
@@ -64,7 +64,7 @@ function FilePane({
   onActivate,
 }: FilePaneProps) {
   return (
-    <section className="min-h-[360px] rounded border border-slate-200 bg-white shadow-sm">
+    <section className="min-h-[360px] rounded border border-slate-200 bg-white">
       <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-slate-500">{icon}</span>
@@ -75,10 +75,10 @@ function FilePane({
         </div>
         <span className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500">{files.length} items</span>
       </header>
-      <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-500">{subtitle}</div>
+      <div className="border-b border-slate-100 bg-white px-3 py-2 text-xs text-slate-500">{subtitle}</div>
       <div className="max-h-[430px] overflow-auto">
         <table className="w-full min-w-[520px] text-left text-sm">
-          <thead className="sticky top-0 bg-white text-[11px] uppercase text-slate-500">
+          <thead className="sticky top-0 border-b border-slate-100 bg-white text-[11px] uppercase text-slate-500">
             <tr>
               <th className="px-3 py-2 font-medium">Name</th>
               <th className="px-3 py-2 font-medium">Size</th>
@@ -113,7 +113,7 @@ function FilePane({
                 key={file.id}
                 onClick={() => onSelect(file.id)}
                 onDoubleClick={() => onActivate?.(file)}
-                className={selectedId === file.id ? 'bg-cyan-50' : 'cursor-pointer hover:bg-slate-50'}
+                className={selectedId === file.id ? 'bg-slate-100' : 'cursor-pointer hover:bg-slate-50'}
               >
                 <td className="max-w-48 px-3 py-2">
                   <span className="flex items-center gap-2">
@@ -126,7 +126,7 @@ function FilePane({
                           event.stopPropagation()
                           onOpenFolder(file)
                         }}
-                        className="ml-auto h-6 rounded border border-slate-300 px-2 text-[11px] font-medium text-slate-600 hover:bg-slate-100"
+                        className="ml-auto h-6 rounded border border-slate-200 px-2 text-[11px] font-medium text-slate-600 hover:border-slate-300 hover:bg-slate-50"
                       >
                         Open
                       </button>
@@ -176,7 +176,7 @@ export function FilesTab({
 
   return (
     <div className="space-y-3" data-testid="files-tab">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-slate-950">Dual-pane file transfer</h2>
           <p className="truncate text-xs text-slate-500">
@@ -189,7 +189,7 @@ export function FilesTab({
             type="button"
             onClick={onUpload}
             disabled={!localSelection || localSelection.type === 'folder'}
-            className="inline-flex h-8 items-center gap-2 rounded border border-cyan-300 bg-cyan-50 px-2.5 text-xs font-medium text-cyan-800 transition hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-8 items-center gap-2 rounded border border-slate-900 bg-slate-900 px-2.5 text-xs font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
           >
             <Upload className="h-3.5 w-3.5" aria-hidden="true" />
             Upload
@@ -198,7 +198,7 @@ export function FilesTab({
             type="button"
             onClick={onDownload}
             disabled={!remoteSelection || remoteSelection.type === 'folder'}
-            className="inline-flex h-8 items-center gap-2 rounded border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
           >
             <Download className="h-3.5 w-3.5" aria-hidden="true" />
             Download
@@ -207,7 +207,7 @@ export function FilesTab({
             type="button"
             onClick={onCopyRemotePath}
             disabled={!remoteSelection}
-            className="inline-flex h-8 items-center gap-2 rounded border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
           >
             Copy remote path
           </button>
@@ -215,7 +215,7 @@ export function FilesTab({
       </div>
 
       <div className="grid gap-2 lg:grid-cols-2">
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2">
           <div className="min-w-0 truncate text-xs text-slate-500">
             <span className="font-medium text-slate-700">Local:</span> {localPath}
           </div>
@@ -223,7 +223,7 @@ export function FilesTab({
             <button
               type="button"
               onClick={onLocalUp}
-              className="inline-flex h-8 items-center gap-2 rounded border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+              className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
             >
               <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
               Up
@@ -231,7 +231,7 @@ export function FilesTab({
             <button
               type="button"
               onClick={onOpenLocalFolder}
-              className="inline-flex h-8 items-center gap-2 rounded border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+              className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
             >
               <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
               Open local folder
@@ -239,14 +239,14 @@ export function FilesTab({
             <button
               type="button"
               onClick={onRefreshLocal}
-              className="inline-flex h-8 items-center gap-2 rounded border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+              className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
             >
               <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
               Refresh
             </button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2">
           <div className="min-w-0 truncate text-xs text-slate-500">
             <span className="font-medium text-slate-700">Remote:</span> {vm.connection.user}@{vm.connection.host}:{remotePath}
           </div>
@@ -255,7 +255,7 @@ export function FilesTab({
               type="button"
               onClick={onRemoteUp}
               disabled={remotePath === '/'}
-              className="inline-flex h-8 items-center gap-2 rounded border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
             >
               <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
               Up
@@ -263,7 +263,7 @@ export function FilesTab({
             <button
               type="button"
               onClick={onRefreshRemote}
-              className="inline-flex h-8 items-center gap-2 rounded border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+              className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
             >
               <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
               Refresh

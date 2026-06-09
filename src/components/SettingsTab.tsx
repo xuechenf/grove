@@ -13,7 +13,7 @@ interface SettingsTabProps {
 
 function Field({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+    <div className="rounded border border-slate-200 bg-white px-3 py-2">
       <div className="text-[11px] font-medium uppercase text-slate-500">{label}</div>
       <div className="truncate text-sm font-semibold text-slate-800">{value}</div>
     </div>
@@ -53,7 +53,7 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_360px]" data-testid="settings-tab">
-      <section className="rounded border border-slate-200 bg-white shadow-sm">
+      <section className="rounded border border-slate-200 bg-white">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-3 py-2">
           <div>
             <h2 className="text-sm font-semibold text-slate-950">Connection profile</h2>
@@ -63,7 +63,7 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
             <button
               type="button"
               onClick={onEditVm}
-              className="inline-flex h-8 items-center gap-2 rounded border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+              className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
             >
               <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
               Modify VM
@@ -71,7 +71,7 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
             <button
               type="button"
               onClick={onTestConnection}
-              className="inline-flex h-8 items-center gap-2 rounded border border-cyan-300 bg-cyan-50 px-2.5 text-xs font-medium text-cyan-800 transition hover:bg-cyan-100"
+              className="inline-flex h-8 items-center gap-2 rounded border border-slate-900 bg-slate-900 px-2.5 text-xs font-medium text-white transition hover:bg-slate-800"
             >
               <PlugZap className="h-3.5 w-3.5" aria-hidden="true" />
               Test connection
@@ -91,24 +91,24 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
         </div>
       </section>
 
-      <section className="rounded border border-slate-200 bg-white shadow-sm">
+      <section className="rounded border border-slate-200 bg-white">
         <header className="border-b border-slate-200 px-3 py-2">
           <h2 className="text-sm font-semibold text-slate-950">VM metadata</h2>
           <p className="text-xs text-slate-500">Provider and inventory labels</p>
         </header>
         <div className="space-y-3 p-3">
-          <div className="flex items-center gap-3 rounded border border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center gap-3 rounded border border-slate-200 bg-white p-3">
             <ServerCog className="h-5 w-5 text-slate-500" aria-hidden="true" />
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-slate-800">{vm.provider.name}</div>
               <div className="truncate text-xs text-slate-500">{vm.provider.region} / {vm.provider.node}</div>
             </div>
           </div>
-          <div className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-white p-3">
             <span className="text-sm font-medium text-slate-700">Health</span>
             <StatusPill status={vm.health} />
           </div>
-          <div className="rounded border border-slate-200 bg-slate-50 p-3">
+          <div className="rounded border border-slate-200 bg-white p-3">
             <div className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-700">
               <KeyRound className="h-4 w-4 text-slate-500" aria-hidden="true" />
               Tags
@@ -130,13 +130,13 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
         </div>
       </section>
 
-      <section className="rounded border border-slate-200 bg-white shadow-sm xl:col-span-2">
+      <section className="rounded border border-slate-200 bg-white xl:col-span-2">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-3 py-2">
           <div>
             <h2 className="text-sm font-semibold text-slate-950">Copilot provider</h2>
             <p className="text-xs text-slate-500">Moonshot / Kimi</p>
           </div>
-          <div className="inline-flex items-center gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
+          <div className="inline-flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600">
             <CheckCircle2 className={`h-3.5 w-3.5 ${providerStatus.configured ? 'text-emerald-600' : 'text-slate-400'}`} aria-hidden="true" />
             {providerStatus.configured ? 'Configured' : 'Not configured'}
           </div>
@@ -150,7 +150,7 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
               type="password"
               autoComplete="off"
               placeholder={providerStatus.configured ? 'Saved; enter a new key to replace' : 'sk-...'}
-              className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-cyan-400"
+              className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
             />
           </label>
           <label className="grid gap-1 text-xs font-medium text-slate-600">
@@ -158,7 +158,7 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
             <input
               value={baseUrl}
               onChange={(event) => setBaseUrl(event.target.value)}
-              className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-cyan-400"
+              className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
             />
           </label>
           <label className="grid gap-1 text-xs font-medium text-slate-600">
@@ -166,7 +166,7 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
             <input
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-cyan-400"
+              className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
             />
           </label>
           <div className="flex items-end">

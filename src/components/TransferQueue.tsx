@@ -26,7 +26,7 @@ export function TransferQueue({ transfers, vms }: TransferQueueProps) {
   }
 
   return (
-    <aside className="border-t border-slate-200 bg-white shadow-[0_-8px_24px_rgba(15,23,42,0.08)]">
+    <aside className="border-t border-slate-200 bg-white">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-2">
         <div>
           <h2 className="text-sm font-semibold text-slate-950">Transfer queue</h2>
@@ -39,7 +39,7 @@ export function TransferQueue({ transfers, vms }: TransferQueueProps) {
           const vm = vms.find((item) => item.id === job.vmId)
           const failed = job.status === 'failed' || job.status === 'conflict'
           return (
-            <div key={job.id} className="rounded border border-slate-200 bg-slate-50 p-2">
+            <div key={job.id} className="rounded border border-slate-200 bg-white p-2">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
                   <span className={cx('text-slate-500', failed && 'text-rose-500')}>{iconForDirection(job.direction)}</span>
@@ -47,9 +47,9 @@ export function TransferQueue({ transfers, vms }: TransferQueueProps) {
                 </span>
                 {failed ? <XCircle className="h-4 w-4 shrink-0 text-rose-500" aria-hidden="true" /> : null}
               </div>
-              <Progress.Root className="h-1.5 overflow-hidden rounded bg-slate-200" value={job.progress}>
+              <Progress.Root className="h-1 overflow-hidden rounded bg-slate-100" value={job.progress}>
                 <Progress.Indicator
-                  className={cx('h-full rounded', failed ? 'bg-rose-500' : 'bg-cyan-500')}
+                  className={cx('h-full rounded', failed ? 'bg-rose-500' : 'bg-slate-700')}
                   style={{ transform: `translateX(-${100 - job.progress}%)` }}
                 />
               </Progress.Root>

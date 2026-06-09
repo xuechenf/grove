@@ -18,15 +18,15 @@ interface MetricTileProps {
 }
 
 const toneStyles = {
-  normal: 'bg-slate-900',
-  warning: 'bg-amber-500',
+  normal: 'bg-slate-700',
+  warning: 'bg-amber-400',
   critical: 'bg-rose-500',
-  info: 'bg-cyan-500',
+  info: 'bg-slate-500',
 }
 
 function MetricTile({ label, value, detail, percent, tone = 'normal', icon }: MetricTileProps) {
   return (
-    <section className="rounded border border-slate-200 bg-white p-3 shadow-sm">
+    <section className="rounded border border-slate-200 bg-white p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-500">
           <span className="text-slate-400">{icon}</span>
@@ -35,7 +35,7 @@ function MetricTile({ label, value, detail, percent, tone = 'normal', icon }: Me
         <span className="text-sm font-semibold text-slate-950">{value}</span>
       </div>
       {typeof percent === 'number' ? (
-        <Progress.Root className="mb-2 h-1.5 overflow-hidden rounded bg-slate-100" value={percent}>
+        <Progress.Root className="mb-2 h-1 overflow-hidden rounded bg-slate-100" value={percent}>
           <Progress.Indicator
             className={cx('h-full rounded transition-transform', toneStyles[tone])}
             style={{ transform: `translateX(-${100 - percent}%)` }}
@@ -49,7 +49,7 @@ function MetricTile({ label, value, detail, percent, tone = 'normal', icon }: Me
 
 function serviceTone(service: ServiceInfo) {
   if (service.state === 'running') {
-    return 'bg-emerald-500'
+    return 'bg-emerald-400'
   }
 
   if (service.state === 'degraded') {
@@ -98,7 +98,7 @@ export function OverviewTab({ vm }: OverviewTabProps) {
       </div>
 
       <div className="grid gap-4 2xl:grid-cols-[1.15fr_0.85fr]">
-        <section className="rounded border border-slate-200 bg-white shadow-sm">
+        <section className="rounded border border-slate-200 bg-white">
           <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-2">
             <div>
               <h2 className="text-sm font-semibold text-slate-950">Services</h2>
@@ -110,7 +110,7 @@ export function OverviewTab({ vm }: OverviewTabProps) {
           </header>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[520px] text-left text-sm">
-              <thead className="bg-slate-50 text-[11px] uppercase text-slate-500">
+              <thead className="border-b border-slate-100 bg-white text-[11px] uppercase text-slate-500">
                 <tr>
                   <th className="px-3 py-2 font-medium">Service</th>
                   <th className="px-3 py-2 font-medium">State</th>
@@ -147,7 +147,7 @@ export function OverviewTab({ vm }: OverviewTabProps) {
           </div>
         </section>
 
-        <section className="rounded border border-slate-200 bg-white shadow-sm">
+        <section className="rounded border border-slate-200 bg-white">
           <header className="border-b border-slate-200 px-3 py-2">
             <h2 className="text-sm font-semibold text-slate-950">Runtime</h2>
             <p className="text-xs text-slate-500">Uptime and top processes</p>
@@ -169,7 +169,7 @@ export function OverviewTab({ vm }: OverviewTabProps) {
             </div>
             <div className="rounded border border-slate-200">
               <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs font-medium text-slate-600">
-                <Activity className="h-4 w-4 text-cyan-600" aria-hidden="true" />
+                <Activity className="h-4 w-4 text-slate-500" aria-hidden="true" />
                 Top processes
               </div>
               {vm.processes.length === 0 ? (

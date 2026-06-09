@@ -22,10 +22,10 @@ export function cx(...classes: Array<string | false | null | undefined>) {
 }
 
 export const healthStyles: Record<VMHealth, string> = {
-  healthy: 'bg-emerald-500',
-  warning: 'bg-amber-500',
+  healthy: 'bg-emerald-400',
+  warning: 'bg-amber-400',
   critical: 'bg-rose-500',
-  offline: 'bg-slate-400',
+  offline: 'bg-slate-300',
 }
 
 export const healthLabels: Record<VMHealth, string> = {
@@ -44,7 +44,7 @@ export const transferLabels: Record<TransferStatus, string> = {
 }
 
 export const dangerButtonStyles: Record<DangerLevel, string> = {
-  safe: 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100',
-  caution: 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100',
-  destructive: 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100',
+  safe: 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50',
+  caution: 'border-amber-200 bg-white text-amber-700 hover:bg-amber-50',
+  destructive: 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50',
 }

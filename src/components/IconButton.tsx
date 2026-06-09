@@ -18,9 +18,9 @@ export function IconButton({
   ...props
 }: IconButtonProps) {
   const variants = {
-    ghost: 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-100',
+    ghost: 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900',
     solid: 'border-slate-900 bg-slate-900 text-white hover:bg-slate-800',
-    danger: 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100',
+    danger: 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50',
   }
 
   return (
@@ -45,7 +45,7 @@ export function IconButton({
         <Tooltip.Portal>
           <Tooltip.Content
             side="bottom"
-            className="z-50 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-white shadow-lg"
+            className="z-50 rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] text-white"
           >
             {label}
             <Tooltip.Arrow className="fill-slate-950" />

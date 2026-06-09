@@ -1297,7 +1297,7 @@ function App() {
   }
 
   return (
-    <div className="flex h-svh flex-col overflow-hidden bg-slate-100 text-slate-900 lg:flex-row">
+    <div className="flex h-svh flex-col overflow-hidden bg-slate-50 text-slate-900 lg:flex-row">
       <Sidebar
         vms={vms}
         selectedVmId={selectedVmId}
@@ -1328,7 +1328,7 @@ function App() {
                     <Tabs.Trigger
                       key={tab.value}
                       value={tab.value}
-                      className="inline-flex h-9 shrink-0 items-center gap-2 rounded border border-transparent px-3 text-sm font-medium text-slate-600 transition data-[state=active]:border-slate-300 data-[state=active]:bg-slate-100 data-[state=active]:text-slate-950"
+                      className="inline-flex h-9 shrink-0 items-center gap-2 border-b-2 border-transparent px-2 text-sm font-medium text-slate-500 transition hover:text-slate-900 data-[state=active]:border-slate-950 data-[state=active]:text-slate-950"
                     >
                       {tab.icon}
                       {tab.label}
@@ -1339,7 +1339,7 @@ function App() {
             </header>
 
             <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as TabId)} className="min-h-0 flex-1">
-              <div className="h-full overflow-auto p-4">
+              <div className="h-full overflow-auto bg-slate-50 p-4">
                 <Tabs.Content value="overview" className="outline-none">
                   <OverviewTab vm={selectedVm} />
                 </Tabs.Content>
@@ -1410,7 +1410,7 @@ function App() {
 
           </>
         ) : (
-          <section className="m-4 rounded border border-slate-200 bg-white p-6 text-center shadow-sm">
+          <section className="m-4 rounded border border-slate-200 bg-white p-6 text-center">
             <h2 className="text-lg font-semibold text-slate-950">No VM selected</h2>
             <p className="mt-1 text-sm text-slate-500">The inventory is empty or the selected VM was removed.</p>
           </section>
@@ -1444,8 +1444,8 @@ function App() {
 
       <Dialog.Root open={Boolean(pendingAction)} onOpenChange={(open) => !open && setPendingAction(null)}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/40" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded border border-slate-200 bg-white p-4 shadow-2xl">
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/30" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded border border-slate-200 bg-white p-4 shadow-xl">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <Dialog.Title className="text-base font-semibold text-slate-950">
@@ -1457,7 +1457,7 @@ function App() {
                 <X className="h-4 w-4" aria-hidden="true" />
               </IconButton>
             </div>
-            <div className="mb-4 flex gap-2 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            <div className="mb-4 flex gap-2 rounded border border-amber-200 bg-white p-3 text-sm text-amber-800">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
               This action runs through the local backend when available and records an activity entry.
             </div>
@@ -1465,7 +1465,7 @@ function App() {
               <button
                 type="button"
                 onClick={() => setPendingAction(null)}
-                className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                className="h-8 rounded border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
               >
                 Cancel
               </button>
@@ -1483,8 +1483,8 @@ function App() {
 
       <Dialog.Root open={Boolean(conflict)} onOpenChange={(open) => !open && setConflict(null)}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/40" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded border border-slate-200 bg-white p-4 shadow-2xl">
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/30" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(460px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded border border-slate-200 bg-white p-4 shadow-xl">
             <Dialog.Title className="text-base font-semibold text-slate-950">File conflict</Dialog.Title>
             <Dialog.Description className="mt-1 text-sm text-slate-500">
               {conflict?.file.name} already exists at {conflict?.remotePath}. Choose how the transfer should proceed.
@@ -1493,21 +1493,21 @@ function App() {
               <button
                 type="button"
                 onClick={() => resolveConflict('overwrite')}
-                className="h-9 rounded border border-amber-300 bg-amber-50 px-3 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                className="h-9 rounded border border-amber-200 bg-white px-3 text-xs font-medium text-amber-800 hover:bg-amber-50"
               >
                 Overwrite
               </button>
               <button
                 type="button"
                 onClick={() => resolveConflict('rename')}
-                className="h-9 rounded border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                className="h-9 rounded border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
               >
                 Rename
               </button>
               <button
                 type="button"
                 onClick={() => resolveConflict('skip')}
-                className="h-9 rounded border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                className="h-9 rounded border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
               >
                 Skip
               </button>

@@ -8,7 +8,7 @@ interface ActivityTabProps {
 
 function iconForActivity(severity: ActivityEvent['severity']) {
   if (severity === 'success') {
-    return <CircleCheck className="h-4 w-4 text-emerald-500" aria-hidden="true" />
+    return <CircleCheck className="h-4 w-4 text-emerald-600" aria-hidden="true" />
   }
 
   if (severity === 'warning') {
@@ -27,7 +27,7 @@ export function ActivityTab({ vm, transfers }: ActivityTabProps) {
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_360px]" data-testid="activity-tab">
-      <section className="rounded border border-slate-200 bg-white shadow-sm">
+      <section className="rounded border border-slate-200 bg-white">
         <header className="border-b border-slate-200 px-3 py-2">
           <h2 className="text-sm font-semibold text-slate-950">Activity stream</h2>
           <p className="text-xs text-slate-500">Control actions, health checks, and copilot executions</p>
@@ -46,7 +46,7 @@ export function ActivityTab({ vm, transfers }: ActivityTabProps) {
         </div>
       </section>
 
-      <section className="rounded border border-slate-200 bg-white shadow-sm">
+      <section className="rounded border border-slate-200 bg-white">
         <header className="border-b border-slate-200 px-3 py-2">
           <h2 className="text-sm font-semibold text-slate-950">Transfer history</h2>
           <p className="text-xs text-slate-500">Jobs scoped to {vm.name}</p>

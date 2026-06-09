@@ -60,7 +60,7 @@ function formFromService(service: AppRunnerService | undefined, defaultLocalPath
 
 function stateTone(state: AppRunnerServiceState) {
   if (state === 'running') {
-    return 'bg-emerald-500'
+    return 'bg-emerald-400'
   }
 
   if (state === 'degraded') {
@@ -151,8 +151,8 @@ function AppRunnerDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100svh-32px)] w-[min(720px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded border border-slate-200 bg-white p-4 shadow-2xl">
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/30" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100svh-32px)] w-[min(720px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded border border-slate-200 bg-white p-4 shadow-xl">
           <form onSubmit={handleSubmit}>
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
@@ -172,7 +172,7 @@ function AppRunnerDialog({
               <label className="grid gap-1 text-sm">
                 <span className="font-medium text-slate-700">Service name</span>
                 <input
-                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-cyan-500"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
                   value={form.name}
                   disabled={mode === 'update'}
                   pattern="[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
@@ -183,7 +183,7 @@ function AppRunnerDialog({
               <label className="grid gap-1 text-sm">
                 <span className="font-medium text-slate-700">Port</span>
                 <input
-                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-cyan-500"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
                   value={form.port}
                   inputMode="numeric"
                   onChange={(event) => updateField('port', event.target.value)}
@@ -193,7 +193,7 @@ function AppRunnerDialog({
             </div>
 
             <div className="mt-3 grid gap-3">
-              <div className="inline-flex w-fit rounded border border-slate-300 bg-slate-50 p-1">
+              <div className="inline-flex w-fit rounded border border-slate-200 bg-white p-1">
                 {(['local', 'github'] as const).map((sourceType) => (
                   <button
                     key={sourceType}
@@ -215,7 +215,7 @@ function AppRunnerDialog({
                 <label className="grid gap-1 text-sm">
                   <span className="font-medium text-slate-700">Local folder</span>
                   <input
-                    className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-cyan-500"
+                    className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
                     value={form.localPath}
                     onChange={(event) => updateField('localPath', event.target.value)}
                     required
@@ -226,7 +226,7 @@ function AppRunnerDialog({
                   <label className="grid gap-1 text-sm">
                     <span className="font-medium text-slate-700">GitHub URL</span>
                     <input
-                      className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-cyan-500"
+                      className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
                       value={form.repoUrl}
                       onChange={(event) => updateField('repoUrl', event.target.value)}
                       required
@@ -235,7 +235,7 @@ function AppRunnerDialog({
                   <label className="grid gap-1 text-sm">
                     <span className="font-medium text-slate-700">Ref</span>
                     <input
-                      className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-cyan-500"
+                      className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
                       value={form.ref}
                       onChange={(event) => updateField('ref', event.target.value)}
                     />
@@ -248,7 +248,7 @@ function AppRunnerDialog({
               <label className="grid gap-1 text-sm">
                 <span className="font-medium text-slate-700">Install command</span>
                 <input
-                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-cyan-500"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
                   value={form.installCommand}
                   onChange={(event) => updateField('installCommand', event.target.value)}
                 />
@@ -256,7 +256,7 @@ function AppRunnerDialog({
               <label className="grid gap-1 text-sm">
                 <span className="font-medium text-slate-700">Build command</span>
                 <input
-                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-cyan-500"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
                   value={form.buildCommand}
                   onChange={(event) => updateField('buildCommand', event.target.value)}
                 />
@@ -264,7 +264,7 @@ function AppRunnerDialog({
               <label className="grid gap-1 text-sm">
                 <span className="font-medium text-slate-700">Start command</span>
                 <input
-                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-cyan-500"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
                   value={form.startCommand}
                   onChange={(event) => updateField('startCommand', event.target.value)}
                   required
@@ -280,7 +280,7 @@ function AppRunnerDialog({
               <button
                 type="button"
                 onClick={() => onOpenChange(false)}
-                className="h-9 rounded border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                className="h-9 rounded border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
               >
                 Cancel
               </button>
@@ -334,7 +334,7 @@ export function AppRunnerTab({ vm, defaultLocalPath, onCreateService, onUpdateSe
 
   return (
     <div className="space-y-3" data-testid="apprunner-tab">
-      <section className="rounded border border-slate-200 bg-white shadow-sm">
+      <section className="rounded border border-slate-200 bg-white">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-3 py-2">
           <div>
             <h2 className="text-sm font-semibold text-slate-950">AppRunner</h2>
@@ -356,7 +356,7 @@ export function AppRunnerTab({ vm, defaultLocalPath, onCreateService, onUpdateSe
 
         <div className="overflow-x-auto">
           <table className="w-full min-w-[920px] text-left text-sm">
-            <thead className="bg-slate-50 text-[11px] uppercase text-slate-500">
+            <thead className="border-b border-slate-100 bg-white text-[11px] uppercase text-slate-500">
               <tr>
                 <th className="px-3 py-2 font-medium">Service</th>
                 <th className="px-3 py-2 font-medium">State</th>
@@ -393,7 +393,7 @@ export function AppRunnerTab({ vm, defaultLocalPath, onCreateService, onUpdateSe
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">{service.remotePath}</td>
                     <td className="px-3 py-2">
                       <a
-                        className="inline-flex items-center gap-1 text-sm font-medium text-cyan-700 hover:text-cyan-900"
+                        className="inline-flex items-center gap-1 text-sm font-medium text-slate-700 hover:text-slate-950"
                         href={service.accessUrl}
                         target="_blank"
                         rel="noreferrer"
@@ -449,8 +449,8 @@ export function AppRunnerTab({ vm, defaultLocalPath, onCreateService, onUpdateSe
 
       <Dialog.Root open={Boolean(removingService)} onOpenChange={(open) => !open && setRemovingService(undefined)}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/40" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded border border-slate-200 bg-white p-4 shadow-2xl">
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/30" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(440px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded border border-slate-200 bg-white p-4 shadow-xl">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <Dialog.Title className="text-base font-semibold text-slate-950">Remove service</Dialog.Title>
@@ -466,7 +466,7 @@ export function AppRunnerTab({ vm, defaultLocalPath, onCreateService, onUpdateSe
               <button
                 type="button"
                 onClick={() => setRemovingService(undefined)}
-                className="h-8 rounded border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                className="h-8 rounded border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
               >
                 Cancel
               </button>

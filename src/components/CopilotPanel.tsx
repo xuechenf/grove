@@ -107,7 +107,7 @@ function renderFormattedContent(content: string) {
     if (blockIndex % 2 === 1) {
       const lines = block.replace(/^\w+\n/, '').trim()
       nodes.push(
-        <pre key={`code-${blockIndex}`} className="my-2 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] leading-relaxed text-cyan-100">
+        <pre key={`code-${blockIndex}`} className="my-2 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] leading-relaxed text-slate-100">
           {lines}
         </pre>,
       )
@@ -134,7 +134,7 @@ function renderFormattedContent(content: string) {
         if (bullet) {
           nodes.push(
             <div key={key} className="flex gap-2 leading-relaxed">
-              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-500" />
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
               <span>{renderInline(bullet[1])}</span>
             </div>,
           )
@@ -145,7 +145,7 @@ function renderFormattedContent(content: string) {
         if (numbered) {
           nodes.push(
             <div key={key} className="grid grid-cols-[1.5rem_1fr] gap-1 leading-relaxed">
-              <span className="font-semibold text-cyan-700">{numbered[1]}.</span>
+              <span className="font-semibold text-slate-500">{numbered[1]}.</span>
               <span>{renderInline(numbered[2])}</span>
             </div>,
           )
@@ -168,7 +168,7 @@ function progressIcon(status: CopilotProgressEvent['status']) {
     return <XCircle className="h-3.5 w-3.5 text-rose-600" aria-hidden="true" />
   }
 
-  return <Circle className="h-3.5 w-3.5 fill-cyan-500 text-cyan-500" aria-hidden="true" />
+  return <Circle className="h-3.5 w-3.5 fill-slate-400 text-slate-400" aria-hidden="true" />
 }
 
 function timestampFromId(id: string, fallback: number) {
@@ -315,7 +315,7 @@ export function CopilotPanel({
 
   return (
     <aside
-      className="relative flex min-h-0 w-full flex-col border-l border-slate-200 bg-slate-50 lg:w-[var(--copilot-panel-width)] lg:flex-none"
+      className="relative flex min-h-0 w-full flex-col border-l border-slate-200 bg-white lg:w-[var(--copilot-panel-width)] lg:flex-none"
       style={{ '--copilot-panel-width': `${panelWidth}px` } as CSSProperties}
     >
       <div
@@ -334,7 +334,7 @@ export function CopilotPanel({
       </div>
       <header className="border-b border-slate-200 bg-white px-4 py-3">
         <div className="mb-2 flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded bg-slate-950 text-cyan-300">
+          <span className="flex h-8 w-8 items-center justify-center rounded border border-slate-200 bg-white text-slate-700">
             <Bot className="h-4 w-4" aria-hidden="true" />
           </span>
           <div className="min-w-0">
@@ -351,7 +351,7 @@ export function CopilotPanel({
               type="button"
               disabled={!vm}
               onClick={() => onCreateProposal(suggestion.type)}
-              className="h-7 rounded border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 transition hover:border-cyan-300 hover:text-cyan-700 disabled:cursor-not-allowed disabled:opacity-45"
+              className="h-7 rounded border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-45"
             >
               {suggestion.label}
             </button>
@@ -359,7 +359,7 @@ export function CopilotPanel({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="min-h-0 flex-1 overflow-auto bg-slate-50/60 p-3">
         <div className="space-y-2">
           {timeline.map((item) => {
             if (item.kind === 'progressBox') {
@@ -368,9 +368,9 @@ export function CopilotPanel({
                 <section
                   key={item.id}
                   aria-live="polite"
-                  className="mr-auto w-full rounded border border-cyan-200 bg-cyan-50/80 px-3 py-2 text-sm text-slate-700"
+                  className="mr-auto w-full rounded border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
                 >
-                  <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase text-cyan-700">
+                  <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase text-slate-500">
                     {item.latest.status === 'running' ? (
                       <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
                     ) : (
@@ -381,10 +381,10 @@ export function CopilotPanel({
                   <div className="font-medium text-slate-900">{item.latest.title}</div>
                   {item.latest.detail ? <div className="mt-1 break-words text-xs leading-relaxed text-slate-500">{item.latest.detail}</div> : null}
                   {visibleEvents.length ? (
-                    <div className="mt-2 space-y-1 border-t border-cyan-200/80 pt-2">
+                    <div className="mt-2 space-y-1 border-t border-slate-100 pt-2">
                       {visibleEvents.map((event) => (
                         <div key={event.id} className="grid grid-cols-[1rem_1fr] gap-2 text-xs text-slate-600">
-                          <span className="mt-0.5">{event.status === 'running' ? <Circle className="h-3.5 w-3.5 fill-cyan-500 text-cyan-500" aria-hidden="true" /> : progressIcon(event.status)}</span>
+                          <span className="mt-0.5">{event.status === 'running' ? <Circle className="h-3.5 w-3.5 fill-slate-400 text-slate-400" aria-hidden="true" /> : progressIcon(event.status)}</span>
                           <div className="min-w-0 truncate">
                             <span className="font-medium text-slate-800">{event.title}</span>
                             {event.detail ? <span className="text-slate-500"> - {event.detail}</span> : null}
@@ -405,10 +405,10 @@ export function CopilotPanel({
                 className={`rounded border px-3 py-2 text-sm ${
                   isAssistant
                     ? 'mr-auto w-full border-slate-200 bg-white text-slate-700'
-                    : 'ml-auto max-w-[92%] border-cyan-200 bg-cyan-600 text-white'
+                    : 'ml-auto max-w-[92%] border-slate-900 bg-slate-900 text-white'
                 }`}
               >
-                <div className={`mb-1 text-[11px] font-medium uppercase ${isAssistant ? 'text-slate-400' : 'text-cyan-100'}`}>
+                <div className={`mb-1 text-[11px] font-medium uppercase ${isAssistant ? 'text-slate-400' : 'text-slate-300'}`}>
                   {isAssistant ? 'copilot' : 'you'} / {message.timestamp}
                 </div>
                 {isAssistant ? renderFormattedContent(message.content) : <p className="leading-relaxed">{message.content}</p>}
@@ -419,20 +419,20 @@ export function CopilotPanel({
 
         <div className="mt-3 space-y-2">
           {proposals.map((proposal) => (
-            <article key={proposal.id} className="rounded border border-slate-200 bg-white p-3 shadow-sm">
+            <article key={proposal.id} className="rounded border border-slate-200 bg-white p-3">
               <div className="mb-2 flex items-start gap-2">
-                <span className="mt-0.5 text-cyan-700">{iconForProposal(proposal.actionType)}</span>
+                <span className="mt-0.5 text-slate-500">{iconForProposal(proposal.actionType)}</span>
                 <div className="min-w-0 flex-1">
                   <h3 className="truncate text-sm font-semibold text-slate-900">{proposal.title}</h3>
                   <p className="text-xs text-slate-500">{proposal.description}</p>
                 </div>
                 <span className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500">{proposal.risk}</span>
               </div>
-              <pre className="mb-2 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] text-cyan-100">
+              <pre className="mb-2 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] text-slate-100">
                 {proposal.command}
               </pre>
               {proposal.status === 'executed' ? (
-                <div className="flex items-center gap-2 rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs text-emerald-700">
+                <div className="flex items-center gap-2 rounded border border-emerald-200 bg-white px-2 py-1.5 text-xs text-emerald-700">
                   <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
                   Executed: {proposal.result}
                 </div>
@@ -462,7 +462,7 @@ export function CopilotPanel({
                 submit()
               }
             }}
-            className="h-9 min-w-0 flex-1 rounded border border-slate-300 px-3 text-sm outline-none focus:border-cyan-400"
+            className="h-9 min-w-0 flex-1 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
             placeholder={vm ? `Ask about ${vm.name}` : 'Select a VM first'}
           />
           <button

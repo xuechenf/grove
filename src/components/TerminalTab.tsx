@@ -117,21 +117,21 @@ function TerminalSessionView({ vm, pane, active, commandDispatch, onCommand }: T
       lineHeight: 1.18,
       scrollback: 5000,
       theme: {
-        background: '#020617',
-        foreground: '#dbeafe',
-        cursor: '#67e8f9',
-        selectionBackground: '#155e75',
-        black: '#0f172a',
-        blue: '#38bdf8',
-        brightBlue: '#7dd3fc',
-        brightCyan: '#67e8f9',
-        brightGreen: '#86efac',
-        brightRed: '#fb7185',
-        cyan: '#22d3ee',
-        green: '#22c55e',
-        red: '#f43f5e',
-        white: '#e2e8f0',
-        yellow: '#facc15',
+        background: '#ffffff',
+        foreground: '#1f2937',
+        cursor: '#111827',
+        selectionBackground: '#e2e8f0',
+        black: '#111827',
+        blue: '#334155',
+        brightBlue: '#475569',
+        brightCyan: '#475569',
+        brightGreen: '#047857',
+        brightRed: '#be123c',
+        cyan: '#475569',
+        green: '#059669',
+        red: '#e11d48',
+        white: '#f8fafc',
+        yellow: '#64748b',
       },
     })
     const fitAddon = new FitAddon()
@@ -160,7 +160,7 @@ function TerminalSessionView({ vm, pane, active, commandDispatch, onCommand }: T
     }
 
     const writePrompt = () => {
-      terminal.write(`\r\n\x1b[36m${connectionUser}@${vmHostname}\x1b[0m:\x1b[33m~\x1b[0m$ `)
+      terminal.write(`\r\n${connectionUser}@${vmHostname}:~$ `)
     }
 
     const runMockCommand = (command: string) => {
@@ -303,20 +303,20 @@ function TerminalSessionView({ vm, pane, active, commandDispatch, onCommand }: T
       promptBufferRef.current = command
       const output = outputFor(command, currentVm)
       writeLines(terminal, `\r\n${output}\r\n`)
-      terminal.write(`\r\n\x1b[36m${currentVm.connection.user}@${currentVm.hostname}\x1b[0m:\x1b[33m~\x1b[0m$ `)
+      terminal.write(`\r\n${currentVm.connection.user}@${currentVm.hostname}:~$ `)
       onCommandRef.current(command, output)
     }
   }, [commandDispatch, pane.id])
 
   return (
     <div className={active ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
-      <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-1.5 text-[11px] text-slate-400">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-white px-3 py-1.5 text-[11px] text-slate-500">
         <span className="truncate">
           ssh -p {vm.connection.port} {vm.connection.user}@{vm.connection.host}
         </span>
-        <span className="shrink-0 rounded border border-slate-700 px-1.5 py-0.5 text-slate-300">{status}</span>
+        <span className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-slate-500">{status}</span>
       </div>
-      <div ref={containerRef} className="grove-terminal min-h-0 flex-1 overflow-hidden bg-slate-950" />
+      <div ref={containerRef} className="grove-terminal min-h-0 flex-1 overflow-hidden bg-white" />
     </div>
   )
 }
@@ -360,15 +360,15 @@ export function TerminalTab({ vm, onCommand }: TerminalTabProps) {
   }
 
   return (
-    <section className="flex h-full min-h-[640px] flex-col rounded border border-slate-800 bg-slate-950 shadow-sm" data-testid="terminal-tab">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2 text-slate-100">
-          <Terminal className="h-4 w-4 text-cyan-300" aria-hidden="true" />
+    <section className="flex h-full min-h-[640px] flex-col rounded border border-slate-200 bg-white" data-testid="terminal-tab">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-slate-900">
+          <Terminal className="h-4 w-4 text-slate-500" aria-hidden="true" />
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">
               {vm.connection.user}@{vm.hostname}
             </h2>
-            <p className="truncate text-xs text-slate-400">
+            <p className="truncate text-xs text-slate-500">
               Interactive PTY sessions. Copilot runs on separate SSH exec/SFTP channels.
             </p>
           </div>
@@ -379,7 +379,7 @@ export function TerminalTab({ vm, onCommand }: TerminalTabProps) {
               key={quickCommand}
               type="button"
               onClick={() => runQuickCommand(quickCommand)}
-              className="h-7 rounded border border-slate-700 px-2 text-[11px] font-medium text-slate-300 transition hover:border-cyan-400 hover:text-cyan-200"
+              className="h-7 rounded border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
             >
               {quickCommand}
             </button>
@@ -388,7 +388,7 @@ export function TerminalTab({ vm, onCommand }: TerminalTabProps) {
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-800 bg-slate-900 px-2 py-1">
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-100 bg-white px-2 py-1">
           {panes.map((pane) => (
             <button
               key={pane.id}
@@ -396,8 +396,8 @@ export function TerminalTab({ vm, onCommand }: TerminalTabProps) {
               onClick={() => setActivePaneId(pane.id)}
               className={`group inline-flex h-8 shrink-0 items-center gap-2 rounded border px-2 text-xs font-medium transition ${
                 activePaneId === pane.id
-                  ? 'border-cyan-400 bg-slate-950 text-cyan-100'
-                  : 'border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                  ? 'border-slate-300 bg-slate-100 text-slate-950'
+                  : 'border-transparent bg-white text-slate-500 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
               <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
@@ -418,7 +418,7 @@ export function TerminalTab({ vm, onCommand }: TerminalTabProps) {
                       closePane(pane.id)
                     }
                   }}
-                  className="rounded p-0.5 text-slate-500 hover:bg-slate-800 hover:text-rose-300"
+                  className="rounded p-0.5 text-slate-400 hover:bg-white hover:text-rose-600"
                 >
                   <X className="h-3 w-3" aria-hidden="true" />
                 </span>
@@ -428,7 +428,7 @@ export function TerminalTab({ vm, onCommand }: TerminalTabProps) {
           <button
             type="button"
             onClick={addPane}
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-slate-800 text-slate-300 transition hover:border-cyan-400 hover:text-cyan-200"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
             aria-label="Open terminal tab"
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
