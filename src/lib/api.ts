@@ -20,6 +20,23 @@ export function apiDisabled() {
 
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? ''
 
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+export function isApiUnavailableError(error: unknown) {
+  return (
+    error instanceof TypeError ||
+    (error instanceof ApiError && [502, 503, 504].includes(error.status))
+  )
+}
+
 function apiUrl(path: string) {
   return `${apiBase}${path}`
 }
@@ -45,8 +62,12 @@ async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   })
 
   if (!response.ok) {
-    const body = await response.json().catch(() => ({ error: response.statusText }))
-    throw new Error(typeof body.error === 'string' ? body.error : response.statusText)
+    const contentType = response.headers.get('content-type') ?? ''
+    const body = contentType.includes('application/json')
+      ? await response.json().catch(() => ({ error: response.statusText }))
+      : { error: await response.text().catch(() => response.statusText) }
+    const message = typeof body.error === 'string' && body.error.trim() ? body.error : response.statusText
+    throw new ApiError(message, response.status)
   }
 
   return response.json() as Promise<T>

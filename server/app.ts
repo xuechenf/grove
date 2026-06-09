@@ -77,12 +77,28 @@ const vmConnectionSchema = z.object({
 
 type AsyncHandler = (request: Request, response: Response) => Promise<void>
 
+function errorPayload(error: unknown) {
+  if (error instanceof z.ZodError) {
+    return {
+      status: 400,
+      message: error.issues[0]?.message ?? 'Invalid request.',
+    }
+  }
+
+  const message = error instanceof Error ? error.message : 'Unknown server error'
+  const status = message.includes('not found') || message.includes('Not found') ? 404 : 400
+  return { status, message }
+}
+
+function sendErrorResponse(response: Response, error: unknown) {
+  const { status, message } = errorPayload(error)
+  response.status(status).json({ error: message })
+}
+
 function asyncRoute(handler: AsyncHandler) {
   return (request: Request, response: Response) => {
     handler(request, response).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : 'Unknown server error'
-      const status = message.includes('not found') || message.includes('Not found') ? 404 : 400
-      response.status(status).json({ error: message })
+      sendErrorResponse(response, error)
     })
   }
 }
@@ -297,8 +313,7 @@ export function createGroveApp(store = new GroveStore()) {
 
   app.use((error: unknown, _request: Request, response: Response, next: NextFunction) => {
     void next
-    const message = error instanceof Error ? error.message : 'Unknown server error'
-    response.status(400).json({ error: message })
+    sendErrorResponse(response, error)
   })
 
   return { app, store }

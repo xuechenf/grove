@@ -29,6 +29,7 @@ import {
   getCopilotProvider,
   getLocalDefaults,
   getSnapshot,
+  isApiUnavailableError,
   listAppRunnerServices,
   listLocalFiles,
   listRemoteFiles,
@@ -974,7 +975,7 @@ function App() {
         )
         return
       } catch (error) {
-        if (!(error instanceof TypeError)) {
+        if (!isApiUnavailableError(error)) {
           throw error
         }
       }
@@ -1018,7 +1019,7 @@ function App() {
         )
         return
       } catch (error) {
-        if (!(error instanceof TypeError)) {
+        if (!isApiUnavailableError(error)) {
           throw error
         }
       }
@@ -1064,7 +1065,7 @@ function App() {
         )
         return
       } catch (error) {
-        if (!(error instanceof TypeError)) {
+        if (!isApiUnavailableError(error)) {
           throw error
         }
       }
@@ -1217,7 +1218,7 @@ function App() {
           setSelectedVmId(vm.id)
           return
         } catch (error) {
-          if (!(error instanceof TypeError)) {
+          if (!isApiUnavailableError(error)) {
             throw error
           }
         }
@@ -1236,7 +1237,7 @@ function App() {
         setSelectedVmId(vm.id)
         return
       } catch (error) {
-        if (!(error instanceof TypeError)) {
+        if (!isApiUnavailableError(error)) {
           throw error
         }
       }

@@ -290,6 +290,22 @@ vms:
     }
   })
 
+  it('returns readable JSON errors for invalid VM connection profiles', async () => {
+    const { app } = createGroveApp()
+    const response = await request(app)
+      .post('/api/vms')
+      .send({
+        name: 'edge-lab',
+        ipAddress: 'edge.internal',
+        user: 'ubuntu',
+        port: 2222,
+        pemPath: 'keys/edge.pem',
+      })
+      .expect(400)
+
+    expect(response.body).toEqual({ error: 'Enter a valid IP address.' })
+  })
+
   it('hydrates services and top processes from SSH runtime output', async () => {
     const { app } = createGroveApp(new GroveStore(new RuntimeSampleSsh()))
     const response = await request(app).get('/api/vms/vm-orchid').expect(200)
