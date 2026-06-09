@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Grove">
+  <rect width="64" height="64" rx="14" fill="#052e2b"/>
+  <circle cx="22" cy="25" r="12" fill="#34d399"/>
+  <circle cx="34" cy="20" r="14" fill="#86efac"/>
+  <circle cx="44" cy="29" r="11" fill="#22c55e"/>
+  <path fill="#14532d" d="M18 33c4 4 10 6 16 6s12-2 16-6c-1 12-8 20-16 20s-15-8-16-20Z"/>
+  <path fill="none" stroke="#ecfccb" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" d="M32 29v23m0-12-9-7m9 7 10-9"/>
+  <path fill="none" stroke="#a7f3d0" stroke-linecap="round" stroke-width="3" d="M18 52h28"/>
+</svg>
