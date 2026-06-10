@@ -335,6 +335,11 @@ async function fastPut(sftp: SFTPWrapper, localPath: string, remotePath: string)
 
 export class RealSshSessionManager implements SshSessionManager {
   private readonly clients = new Map<string, Promise<Client>>()
+  private readonly clientFactory: () => Client
+
+  constructor(clientFactory: () => Client = () => new Client()) {
+    this.clientFactory = clientFactory
+  }
 
   async executeCommand(request: CommandExecutionRequest): Promise<CommandRun> {
     const startedAt = nowIso()
@@ -589,18 +594,49 @@ export class RealSshSessionManager implements SshSessionManager {
     }
 
     return new Promise<Client>((resolveClient, reject) => {
-      const client = new Client()
-      const cleanupFailure = (error: Error) => {
+      const client = this.clientFactory()
+      let ready = false
+      let settled = false
+
+      const rejectConnection = (error: Error) => {
+        if (settled) {
+          return
+        }
+
+        settled = true
         this.clients.delete(vm.id)
         reject(error)
       }
 
+      const handleError = (error: Error) => {
+        this.clients.delete(vm.id)
+        if (!ready) {
+          rejectConnection(error)
+        }
+      }
+
+      const handleCloseBeforeReady = () => {
+        this.clients.delete(vm.id)
+        if (!ready) {
+          rejectConnection(new Error('SSH connection closed before it was ready.'))
+        }
+      }
+
       client
-        .once('ready', () => resolveClient(client))
-        .once('error', cleanupFailure)
-        .once('end', () => this.clients.delete(vm.id))
-        .once('close', () => this.clients.delete(vm.id))
-        .connect(config)
+        .once('ready', () => {
+          ready = true
+          settled = true
+          resolveClient(client)
+        })
+        .on('error', handleError)
+        .once('end', handleCloseBeforeReady)
+        .once('close', handleCloseBeforeReady)
+
+      try {
+        client.connect(config)
+      } catch (error) {
+        rejectConnection(error instanceof Error ? error : new Error('SSH connection failed.'))
+      }
     })
   }
 

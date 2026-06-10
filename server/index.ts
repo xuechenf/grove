@@ -83,6 +83,18 @@ terminalWss.on('connection', async (socket, request) => {
       socket.close()
     })
 
+    stream.on('error', (error: Error) => {
+      send(socket, {
+        type: 'terminal.data',
+        payload: {
+          sessionId: session.id,
+          vmId,
+          data: `\r\n${error.message}\r\n`,
+        },
+      })
+      socket.close()
+    })
+
     socket.on('message', async (raw) => {
       try {
         const message = JSON.parse(String(raw)) as {

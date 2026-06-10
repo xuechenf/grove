@@ -67,8 +67,16 @@ function outputFor(command: string, vm: VM) {
   return `${vm.hostname} up ${vm.metrics.uptime}, load average: ${vm.metrics.loadAverage.join(', ')}`
 }
 
+function scrollTerminalToBottom(terminal: XTerm) {
+  try {
+    terminal.scrollToBottom()
+  } catch {
+    // xterm can finish a pending write after HMR or teardown has removed renderer dimensions.
+  }
+}
+
 function writeLines(terminal: XTerm, text: string) {
-  terminal.write(text.replace(/\n/g, '\r\n'), () => terminal.scrollToBottom())
+  terminal.write(text.replace(/\n/g, '\r\n'), () => scrollTerminalToBottom(terminal))
 }
 
 function TerminalSessionView({ vm, pane, active, commandDispatch, onCommand }: TerminalSessionViewProps) {
@@ -274,7 +282,10 @@ function TerminalSessionView({ vm, pane, active, commandDispatch, onCommand }: T
     }
 
     window.requestAnimationFrame(() => {
-      terminalRef.current?.scrollToBottom()
+      const terminal = terminalRef.current
+      if (terminal) {
+        scrollTerminalToBottom(terminal)
+      }
     })
   }, [active])
 
