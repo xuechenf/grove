@@ -65,7 +65,7 @@ export function OverviewTab({ vm }: OverviewTabProps) {
 
   return (
     <div className="space-y-4" data-testid="overview-tab">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2">
         <MetricTile
           label="CPU"
           value={`${vm.metrics.cpuPercent}%`}

@@ -1,8 +1,19 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
-import { AlertTriangle, FileText, LayoutDashboard, ListChecks, Rocket, Settings, TerminalSquare, X } from 'lucide-react'
-import type { ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import {
+  AlertTriangle,
+  FileText,
+  LayoutDashboard,
+  ListChecks,
+  PanelRightClose,
+  PanelRightOpen,
+  Rocket,
+  Settings,
+  TerminalSquare,
+  X,
+} from 'lucide-react'
+import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityTab } from './components/ActivityTab'
 import { AppRunnerTab } from './components/AppRunnerTab'
 import { CopilotPanel } from './components/CopilotPanel'
@@ -41,6 +52,7 @@ import {
   updateAppRunnerService as updateAppRunnerProfile,
   updateVm as updateVmProfile,
 } from './lib/api'
+import { cx } from './lib/format'
 import {
   initialMessages,
   initialProposals,
@@ -80,6 +92,10 @@ const visibleVmActions = vmActions.filter(
   (action) => !['start', 'stop', 'suspend', 'snapshot', 'clone'].includes(action.id),
 )
 
+const DEFAULT_INFO_PANEL_PERCENT = 50
+const MIN_INFO_PANEL_PERCENT = 32
+const MAX_INFO_PANEL_PERCENT = 68
+
 const fallbackLocalDefaults: LocalDefaults = {
   workspacePath: localFiles[0]?.path ?? '.',
   downloadsPath: localFiles[0]?.path ?? '.',
@@ -118,6 +134,10 @@ function makeActivity(title: string, detail: string, severity: ActivityEvent['se
 
 function nextTransferId() {
   return `job-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function clampInfoPanelPercent(value: number) {
+  return Math.min(Math.max(value, MIN_INFO_PANEL_PERCENT), MAX_INFO_PANEL_PERCENT)
 }
 
 function selectAvailableVm(current: string | undefined, availableVms: VM[]) {
@@ -434,6 +454,10 @@ function App() {
   const [pendingAction, setPendingAction] = useState<VMAction | null>(null)
   const [conflict, setConflict] = useState<ConflictState | null>(null)
   const [vmEditorMode, setVmEditorMode] = useState<'add' | 'edit' | null>(null)
+  const [isWorkspaceCollapsed, setIsWorkspaceCollapsed] = useState(false)
+  const [infoPanelPercent, setInfoPanelPercent] = useState(DEFAULT_INFO_PANEL_PERCENT)
+  const [isResizingInfoPanel, setIsResizingInfoPanel] = useState(false)
+  const workspaceSplitRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (apiDisabled()) {
@@ -540,6 +564,70 @@ function App() {
   const remoteLoading = selectedVm ? remoteLoadingByVm[selectedVm.id] ?? false : false
   const remoteError = selectedVm ? remoteErrorByVm[selectedVm.id] : undefined
   const remoteVmId = selectedVm?.id
+  const splitPanelStyles = {
+    '--copilot-split-percent': `${100 - infoPanelPercent}%`,
+    '--info-split-percent': `${infoPanelPercent}%`,
+  } as CSSProperties
+
+  const resizeInfoPanel = useCallback((clientX: number) => {
+    const bounds = workspaceSplitRef.current?.getBoundingClientRect()
+    if (!bounds || bounds.width <= 0) {
+      return
+    }
+
+    const nextPercent = ((bounds.right - clientX) / bounds.width) * 100
+    setInfoPanelPercent(clampInfoPanelPercent(nextPercent))
+  }, [])
+
+  function beginInfoPanelResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (window.innerWidth < 1024 || isWorkspaceCollapsed) {
+      return
+    }
+
+    event.preventDefault()
+    resizeInfoPanel(event.clientX)
+    setIsResizingInfoPanel(true)
+  }
+
+  function resizeInfoPanelWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+      return
+    }
+
+    event.preventDefault()
+    setInfoPanelPercent((current) =>
+      clampInfoPanelPercent(current + (event.key === 'ArrowLeft' ? 3 : -3)),
+    )
+  }
+
+  useEffect(() => {
+    if (!isResizingInfoPanel) {
+      return undefined
+    }
+
+    const originalCursor = document.body.style.cursor
+    const originalUserSelect = document.body.style.userSelect
+
+    function handlePointerMove(event: PointerEvent) {
+      resizeInfoPanel(event.clientX)
+    }
+
+    function stopResize() {
+      setIsResizingInfoPanel(false)
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopResize)
+
+    return () => {
+      document.body.style.cursor = originalCursor
+      document.body.style.userSelect = originalUserSelect
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopResize)
+    }
+  }, [isResizingInfoPanel, resizeInfoPanel])
 
   useEffect(() => {
     if (apiDisabled()) {
@@ -1297,7 +1385,7 @@ function App() {
   }
 
   return (
-    <div className="flex h-svh flex-col overflow-hidden bg-slate-50 text-slate-900 lg:flex-row">
+    <div className="flex h-svh flex-col overflow-auto bg-slate-50 text-slate-900 lg:flex-row lg:overflow-hidden">
       <Sidebar
         vms={vms}
         selectedVmId={selectedVmId}
@@ -1305,7 +1393,80 @@ function App() {
         onAddVm={() => setVmEditorMode('add')}
       />
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        ref={workspaceSplitRef}
+        className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row"
+        style={splitPanelStyles}
+      >
+        <div
+          className={cx(
+            'flex min-w-0 flex-col',
+            isWorkspaceCollapsed ? 'lg:flex-1' : 'lg:w-[var(--copilot-split-percent)] lg:flex-none',
+          )}
+        >
+          <CopilotPanel
+            vm={selectedVm}
+            activeTab={activeTab}
+            messages={messages}
+            progress={selectedVm ? copilotProgress.filter((event) => event.vmId === selectedVm.id) : []}
+            proposals={selectedVm ? proposals.filter((proposal) => proposal.vmId === selectedVm.id) : []}
+            isBusy={selectedVm ? copilotBusyByVm[selectedVm.id] ?? false : false}
+            onSendMessage={sendMessage}
+            onCreateProposal={createProposal}
+            onConfirmProposal={confirmProposal}
+          />
+        </div>
+
+        {!isWorkspaceCollapsed ? (
+          <div
+            role="separator"
+            aria-label="Resize copilot and information panels"
+            aria-orientation="vertical"
+            aria-valuemin={MIN_INFO_PANEL_PERCENT}
+            aria-valuemax={MAX_INFO_PANEL_PERCENT}
+            aria-valuenow={Math.round(infoPanelPercent)}
+            tabIndex={0}
+            onPointerDown={beginInfoPanelResize}
+            onKeyDown={resizeInfoPanelWithKeyboard}
+            className="group relative z-10 hidden w-3 shrink-0 cursor-col-resize items-center justify-center bg-slate-50 outline-none lg:flex"
+          >
+            <span className="h-12 w-0.5 rounded bg-slate-300 opacity-60 transition group-hover:opacity-100 group-focus:opacity-100" />
+          </div>
+        ) : null}
+
+        <main
+          className={cx(
+            'flex min-h-[520px] min-w-0 flex-col border-l border-slate-200 bg-slate-50 transition-[width] duration-200 lg:min-h-0 lg:flex-none',
+            isWorkspaceCollapsed ? 'lg:w-16' : 'lg:w-[var(--info-split-percent)]',
+          )}
+        >
+        {isWorkspaceCollapsed ? (
+          <section className="hidden h-full flex-col items-center gap-2 bg-white px-2 py-3 lg:flex">
+            <IconButton label="Expand VM workspace" onClick={() => setIsWorkspaceCollapsed(false)}>
+              <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
+            </IconButton>
+            <div className="mt-2 flex flex-col gap-1" aria-label="VM sections">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  aria-label={`Open ${tab.label}`}
+                  onClick={() => {
+                    setActiveTab(tab.value)
+                    setIsWorkspaceCollapsed(false)
+                  }}
+                  className={cx(
+                    'inline-flex h-9 w-9 items-center justify-center rounded border text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900',
+                    activeTab === tab.value ? 'border-slate-300 bg-slate-50 text-slate-950' : 'border-transparent',
+                  )}
+                >
+                  {tab.icon}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        <div className={cx('flex min-h-0 flex-1 flex-col', isWorkspaceCollapsed && 'lg:hidden')}>
         {selectedVm ? (
           <>
             <header className="border-b border-slate-200 bg-white px-4 py-3">
@@ -1319,7 +1480,16 @@ function App() {
                     {selectedVm.hostname} / {selectedVm.ipAddress} / {selectedVm.os}
                   </p>
                 </div>
-                <LifecycleControls lifecycle={selectedVm.lifecycle} actions={visibleVmActions} onAction={handleLifecycle} />
+                <div className="flex flex-wrap items-start justify-end gap-2">
+                  <LifecycleControls lifecycle={selectedVm.lifecycle} actions={visibleVmActions} onAction={handleLifecycle} />
+                  <IconButton
+                    label="Collapse VM workspace"
+                    onClick={() => setIsWorkspaceCollapsed(true)}
+                    className="hidden lg:inline-flex"
+                  >
+                    <PanelRightClose className="h-4 w-4" aria-hidden="true" />
+                  </IconButton>
+                </div>
               </div>
 
               <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as TabId)}>
@@ -1415,19 +1585,9 @@ function App() {
             <p className="mt-1 text-sm text-slate-500">The inventory is empty or the selected VM was removed.</p>
           </section>
         )}
-      </main>
-
-      <CopilotPanel
-        vm={selectedVm}
-        activeTab={activeTab}
-        messages={messages}
-        progress={selectedVm ? copilotProgress.filter((event) => event.vmId === selectedVm.id) : []}
-        proposals={selectedVm ? proposals.filter((proposal) => proposal.vmId === selectedVm.id) : []}
-        isBusy={selectedVm ? copilotBusyByVm[selectedVm.id] ?? false : false}
-        onSendMessage={sendMessage}
-        onCreateProposal={createProposal}
-        onConfirmProposal={confirmProposal}
-      />
+        </div>
+        </main>
+      </div>
 
       <VmEditorDialog
         key={`${vmEditorMode ?? 'closed'}-${selectedVm?.id ?? 'none'}`}

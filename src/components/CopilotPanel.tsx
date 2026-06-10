@@ -15,9 +15,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type KeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
 import type { ActionProposal, CopilotMessage, CopilotProgressEvent, TabId, VM } from '../types'
@@ -32,14 +30,6 @@ interface CopilotPanelProps {
   onSendMessage: (message: string) => void
   onCreateProposal: (type: ActionProposal['actionType']) => void
   onConfirmProposal: (proposalId: string) => void
-}
-
-const DEFAULT_PANEL_WIDTH = 384
-const MIN_PANEL_WIDTH = 320
-const MAX_PANEL_WIDTH = 680
-
-function clampPanelWidth(width: number) {
-  return Math.min(Math.max(width, MIN_PANEL_WIDTH), MAX_PANEL_WIDTH)
 }
 
 function iconForProposal(type: ActionProposal['actionType']) {
@@ -198,8 +188,6 @@ export function CopilotPanel({
   onConfirmProposal,
 }: CopilotPanelProps) {
   const [draft, setDraft] = useState('')
-  const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH)
-  const [isResizing, setIsResizing] = useState(false)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const vmMessages = useMemo(
     () => messages.filter((message) => !message.contextVmId || message.contextVmId === vm?.id),
@@ -255,57 +243,9 @@ export function CopilotPanel({
     }
   }, [timeline, isBusy])
 
-  useEffect(() => {
-    if (!isResizing) {
-      return undefined
-    }
-
-    const originalCursor = document.body.style.cursor
-    const originalUserSelect = document.body.style.userSelect
-
-    function resize(event: PointerEvent) {
-      setPanelWidth(clampPanelWidth(window.innerWidth - event.clientX))
-    }
-
-    function stopResize() {
-      setIsResizing(false)
-    }
-
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    window.addEventListener('pointermove', resize)
-    window.addEventListener('pointerup', stopResize)
-
-    return () => {
-      document.body.style.cursor = originalCursor
-      document.body.style.userSelect = originalUserSelect
-      window.removeEventListener('pointermove', resize)
-      window.removeEventListener('pointerup', stopResize)
-    }
-  }, [isResizing])
-
-  function beginResize(event: ReactPointerEvent<HTMLDivElement>) {
-    if (window.innerWidth < 1024) {
-      return
-    }
-
-    event.preventDefault()
-    setPanelWidth(clampPanelWidth(window.innerWidth - event.clientX))
-    setIsResizing(true)
-  }
-
-  function resizeWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
-      return
-    }
-
-    event.preventDefault()
-    setPanelWidth((current) => clampPanelWidth(current + (event.key === 'ArrowLeft' ? 24 : -24)))
-  }
-
   function submit() {
     const trimmed = draft.trim()
-    if (!trimmed) {
+    if (!trimmed || !vm || isBusy) {
       return
     }
 
@@ -313,54 +253,41 @@ export function CopilotPanel({
     setDraft('')
   }
 
+  function handleDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey) {
+      return
+    }
+
+    event.preventDefault()
+    submit()
+  }
+
   return (
-    <aside
-      className="relative flex min-h-0 w-full flex-col border-l border-slate-200 bg-white lg:w-[var(--copilot-panel-width)] lg:flex-none"
-      style={{ '--copilot-panel-width': `${panelWidth}px` } as CSSProperties}
-    >
-      <div
-        role="separator"
-        aria-label="Resize copilot panel"
-        aria-orientation="vertical"
-        aria-valuemin={MIN_PANEL_WIDTH}
-        aria-valuemax={MAX_PANEL_WIDTH}
-        aria-valuenow={panelWidth}
-        tabIndex={0}
-        onPointerDown={beginResize}
-        onKeyDown={resizeWithKeyboard}
-        className="group absolute bottom-0 left-0 top-0 z-10 hidden w-3 -translate-x-1.5 cursor-col-resize items-center justify-center outline-none lg:flex"
-      >
-        <span className="h-10 w-0.5 rounded bg-slate-300 opacity-0 transition group-hover:opacity-100 group-focus:opacity-100" />
-      </div>
+    <section className="flex min-h-[560px] min-w-0 flex-1 flex-col border-r border-slate-200 bg-white lg:min-h-0">
       <header className="border-b border-slate-200 bg-white px-4 py-3">
-        <div className="mb-2 flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded border border-slate-200 bg-white text-slate-700">
-            <Bot className="h-4 w-4" aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold text-slate-950">VM copilot</h2>
-            <p className="truncate text-xs text-slate-500">
-              Context: {vm ? `${vm.name} / ${activeTab}` : 'no VM selected'}
-            </p>
+        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-slate-200 bg-white text-slate-700">
+              <Bot className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-slate-950">VM copilot</h2>
+              <p className="truncate text-xs text-slate-500">
+                {vm ? `${vm.name} / ${activeTab}` : 'No VM selected'}
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {suggestionSet(activeTab).map((suggestion) => (
-            <button
-              key={`${activeTab}-${suggestion.type}`}
-              type="button"
-              disabled={!vm}
-              onClick={() => onCreateProposal(suggestion.type)}
-              className="h-7 rounded border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-45"
-            >
-              {suggestion.label}
-            </button>
-          ))}
+          {isBusy ? (
+            <span className="inline-flex h-8 shrink-0 items-center gap-2 rounded border border-slate-200 bg-slate-50 px-2.5 text-xs font-medium text-slate-600">
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              Working
+            </span>
+          ) : null}
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-auto bg-slate-50/60 p-3">
-        <div className="space-y-2">
+      <div className="min-h-0 flex-1 overflow-auto bg-white px-4 py-5">
+        <div className="mx-auto flex max-w-3xl flex-col gap-5">
           {timeline.map((item) => {
             if (item.kind === 'progressBox') {
               const visibleEvents = item.events.filter((event) => event.id !== item.latest.id).slice(-3)
@@ -368,7 +295,7 @@ export function CopilotPanel({
                 <section
                   key={item.id}
                   aria-live="polite"
-                  className="mr-auto w-full rounded border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                  className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700"
                 >
                   <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase text-slate-500">
                     {item.latest.status === 'running' ? (
@@ -381,7 +308,7 @@ export function CopilotPanel({
                   <div className="font-medium text-slate-900">{item.latest.title}</div>
                   {item.latest.detail ? <div className="mt-1 break-words text-xs leading-relaxed text-slate-500">{item.latest.detail}</div> : null}
                   {visibleEvents.length ? (
-                    <div className="mt-2 space-y-1 border-t border-slate-100 pt-2">
+                    <div className="mt-2 space-y-1 border-t border-slate-200 pt-2">
                       {visibleEvents.map((event) => (
                         <div key={event.id} className="grid grid-cols-[1rem_1fr] gap-2 text-xs text-slate-600">
                           <span className="mt-0.5">{event.status === 'running' ? <Circle className="h-3.5 w-3.5 fill-slate-400 text-slate-400" aria-hidden="true" /> : progressIcon(event.status)}</span>
@@ -399,83 +326,114 @@ export function CopilotPanel({
 
             const message = item.message
             const isAssistant = message.role === 'assistant'
+
+            if (!isAssistant) {
+              return (
+                <article
+                  key={message.id}
+                  className="ml-auto max-w-[82%] rounded-lg bg-slate-900 px-4 py-2.5 text-sm text-white shadow-sm"
+                >
+                  <div className="mb-1 text-[11px] font-medium uppercase text-slate-300">you / {message.timestamp}</div>
+                  <p className="break-words leading-relaxed">{message.content}</p>
+                </article>
+              )
+            }
+
             return (
-              <article
-                key={message.id}
-                className={`rounded border px-3 py-2 text-sm ${
-                  isAssistant
-                    ? 'mr-auto w-full border-slate-200 bg-white text-slate-700'
-                    : 'ml-auto max-w-[92%] border-slate-900 bg-slate-900 text-white'
-                }`}
-              >
-                <div className={`mb-1 text-[11px] font-medium uppercase ${isAssistant ? 'text-slate-400' : 'text-slate-300'}`}>
-                  {isAssistant ? 'copilot' : 'you'} / {message.timestamp}
+              <article key={message.id} className="grid grid-cols-[2rem_1fr] gap-3 text-sm text-slate-700">
+                <span className="flex h-8 w-8 items-center justify-center rounded border border-slate-200 bg-white text-slate-600">
+                  <Bot className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <div className="mb-1 text-[11px] font-medium uppercase text-slate-400">copilot / {message.timestamp}</div>
+                  {renderFormattedContent(message.content)}
                 </div>
-                {isAssistant ? renderFormattedContent(message.content) : <p className="leading-relaxed">{message.content}</p>}
               </article>
             )
           })}
-        </div>
 
-        <div className="mt-3 space-y-2">
           {proposals.map((proposal) => (
-            <article key={proposal.id} className="rounded border border-slate-200 bg-white p-3">
-              <div className="mb-2 flex items-start gap-2">
-                <span className="mt-0.5 text-slate-500">{iconForProposal(proposal.actionType)}</span>
-                <div className="min-w-0 flex-1">
-                  <h3 className="truncate text-sm font-semibold text-slate-900">{proposal.title}</h3>
-                  <p className="text-xs text-slate-500">{proposal.description}</p>
+            <article key={proposal.id} className="grid grid-cols-[2rem_1fr] gap-3 text-sm">
+              <span className="flex h-8 w-8 items-center justify-center rounded border border-slate-200 bg-white text-slate-500">
+                {iconForProposal(proposal.actionType)}
+              </span>
+              <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="mb-2 flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="break-words text-sm font-semibold text-slate-900">{proposal.title}</h3>
+                    <p className="text-xs text-slate-500">{proposal.description}</p>
+                  </div>
+                  <span className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500">{proposal.risk}</span>
                 </div>
-                <span className="rounded border border-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500">{proposal.risk}</span>
+                <pre className="mb-2 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] text-slate-100">
+                  {proposal.command}
+                </pre>
+                {proposal.status === 'executed' ? (
+                  <div className="flex items-center gap-2 rounded border border-emerald-200 bg-white px-2 py-1.5 text-xs text-emerald-700">
+                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    Executed: {proposal.result}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onConfirmProposal(proposal.id)}
+                    className="inline-flex h-8 items-center gap-2 rounded border border-slate-900 bg-slate-900 px-2.5 text-xs font-medium text-white transition hover:bg-slate-800"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    Confirm action
+                  </button>
+                )}
               </div>
-              <pre className="mb-2 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] text-slate-100">
-                {proposal.command}
-              </pre>
-              {proposal.status === 'executed' ? (
-                <div className="flex items-center gap-2 rounded border border-emerald-200 bg-white px-2 py-1.5 text-xs text-emerald-700">
-                  <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  Executed: {proposal.result}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onConfirmProposal(proposal.id)}
-                  className="inline-flex h-8 items-center gap-2 rounded border border-slate-900 bg-slate-900 px-2.5 text-xs font-medium text-white transition hover:bg-slate-800"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  Confirm action
-                </button>
-              )}
             </article>
           ))}
+          <div ref={bottomRef} />
         </div>
-        <div ref={bottomRef} />
       </div>
 
-      <div className="border-t border-slate-200 bg-white p-3">
-        <div className="flex items-center gap-2">
-          <input
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                submit()
-              }
-            }}
-            className="h-9 min-w-0 flex-1 rounded border border-slate-300 px-3 text-sm outline-none focus:border-slate-500"
-            placeholder={vm ? `Ask about ${vm.name}` : 'Select a VM first'}
-          />
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!vm}
-            className="inline-flex h-9 w-9 items-center justify-center rounded border border-slate-900 bg-slate-900 text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
-            aria-label="Send copilot message"
-          >
-            {isBusy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Send className="h-4 w-4" aria-hidden="true" />}
-          </button>
+      <div className="border-t border-slate-200 bg-white px-4 py-3">
+        <div className="mx-auto max-w-3xl">
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {suggestionSet(activeTab).map((suggestion) => (
+              <button
+                key={`${activeTab}-${suggestion.type}`}
+                type="button"
+                disabled={!vm}
+                onClick={() => onCreateProposal(suggestion.type)}
+                className="inline-flex h-8 items-center gap-1.5 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {iconForProposal(suggestion.type)}
+                {suggestion.label}
+              </button>
+            ))}
+          </div>
+          <div className="rounded-lg border border-slate-300 bg-white p-2 shadow-sm transition focus-within:border-slate-500 focus-within:ring-1 focus-within:ring-slate-500">
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={handleDraftKeyDown}
+              disabled={!vm}
+              rows={1}
+              aria-label="Copilot message"
+              className="max-h-36 min-h-12 w-full resize-none overflow-auto px-1 py-1 text-sm leading-relaxed text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:bg-white"
+              placeholder={vm ? `Ask about ${vm.name}` : 'Select a VM first'}
+            />
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-xs text-slate-400">
+                {vm ? `${vm.connection.user}@${vm.connection.host}` : 'No active context'}
+              </span>
+              <button
+                type="button"
+                onClick={submit}
+                disabled={!vm || isBusy || !draft.trim()}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded border border-slate-900 bg-slate-900 text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
+                aria-label="Send copilot message"
+              >
+                {isBusy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Send className="h-4 w-4" aria-hidden="true" />}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-    </aside>
+    </section>
   )
 }
