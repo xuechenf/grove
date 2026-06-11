@@ -3,7 +3,6 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import App from './App'
 import { CopilotPanel } from './components/CopilotPanel'
-import { vms as fixtureVms } from './data/fixtures'
 
 function setup() {
   return {
@@ -12,10 +11,19 @@ function setup() {
   }
 }
 
+/** The app boots on the fleet dashboard; single-VM tests select a VM first. */
+async function openOrchid(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: /Select orchid-build-01/i }))
+}
+
 describe('Grove VM console', () => {
   it('renders the VM inventory and switches selected VM context', async () => {
     const { user } = setup()
 
+    // Boot lands on the fleet dashboard ("All VMs" scope).
+    expect(screen.getByRole('heading', { name: 'All VMs' })).toBeInTheDocument()
+
+    await openOrchid(user)
     expect(screen.getByRole('heading', { name: 'orchid-build-01' })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /cedar-db-02/i }))
@@ -26,6 +34,7 @@ describe('Grove VM console', () => {
 
   it('switches to the dual-pane file explorer', async () => {
     const { user } = setup()
+    await openOrchid(user)
 
     await user.click(screen.getByRole('tab', { name: /Files/i }))
 
@@ -36,6 +45,7 @@ describe('Grove VM console', () => {
 
   it('keeps the transfer queue scoped to the files tab', async () => {
     const { user } = setup()
+    await openOrchid(user)
 
     expect(screen.queryByText('Transfer queue')).not.toBeInTheDocument()
 
@@ -48,6 +58,7 @@ describe('Grove VM console', () => {
 
   it('creates and removes AppRunner services in local mode', async () => {
     const { user } = setup()
+    await openOrchid(user)
 
     await user.click(screen.getByRole('tab', { name: /AppRunner/i }))
 
@@ -75,6 +86,7 @@ describe('Grove VM console', () => {
 
   it('confirms a lifecycle action and records activity', async () => {
     const { user } = setup()
+    await openOrchid(user)
 
     await user.click(screen.getByRole('button', { name: /Reboot selected VM/i }))
     expect(screen.getByRole('dialog', { name: /Confirm Reboot/i })).toBeInTheDocument()
@@ -87,12 +99,40 @@ describe('Grove VM console', () => {
 
   it('adds an upload transfer job for the selected local file', async () => {
     const { user } = setup()
+    await openOrchid(user)
 
     await user.click(screen.getByRole('tab', { name: /Files/i }))
     await user.click(screen.getByRole('button', { name: 'Upload' }))
 
     expect(screen.getByText('12.4 MB/s')).toBeInTheDocument()
     expect(screen.getAllByText('grove-upload-demo.txt').length).toBeGreaterThan(1)
+  })
+
+  it('clicking All VMs swaps the info panel to the fleet dashboard', async () => {
+    const { user } = setup()
+
+    // Start on a single VM, then return to fleet scope.
+    await user.click(screen.getByRole('button', { name: /Select cedar-db-02/i }))
+    expect(screen.getByRole('heading', { name: 'cedar-db-02' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Overview/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'All VMs' }))
+
+    expect(screen.getByRole('heading', { name: 'All VMs' })).toBeInTheDocument()
+    expect(screen.getByTestId('fleet-overview-tab')).toBeInTheDocument()
+    // The single-VM tab bar is gone in fleet scope.
+    expect(screen.queryByRole('tab', { name: /Overview/i })).not.toBeInTheDocument()
+    // Per-VM rows with drill-down buttons.
+    expect(screen.getByRole('button', { name: 'Open orchid-build-01' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open maple-lab-03' })).toBeInTheDocument()
+    // Real alerts listed; the 'No active alerts' placeholder is filtered out.
+    expect(screen.getByText(/Disk usage is approaching the 90% warning threshold/)).toBeInTheDocument()
+    expect(screen.queryByText('No active alerts')).not.toBeInTheDocument()
+
+    // Drill down from the dashboard back to a single VM.
+    await user.click(screen.getByRole('button', { name: 'Open maple-lab-03' }))
+    expect(screen.getByRole('heading', { name: 'maple-lab-03' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Overview/i })).toBeInTheDocument()
   })
 
   it('adds and modifies VM connection profiles', async () => {
@@ -129,80 +169,309 @@ describe('Grove VM console', () => {
     expect(screen.getByText('keys/edge-updated.pem')).toBeInTheDocument()
   })
 
-  it('creates and confirms a contextual copilot proposal', async () => {
+  it('focuses copilot on a VM and resolves a pending action', async () => {
     const { user } = setup()
 
-    await user.click(screen.getByRole('button', { name: 'Inspect logs' }))
+    // The seeded proposal is scoped to cedar; focus that VM to see it.
+    await user.click(screen.getByRole('button', { name: /Select cedar-db-02/i }))
 
-    const proposalTitle = screen.getByText('Inspect logs on orchid-build-01')
-    const proposal = proposalTitle.closest('article')
+    const proposalTitle = screen.getByText('Explain disk pressure')
+    const proposal = proposalTitle.closest('article') as HTMLElement
     expect(proposal).not.toBeNull()
 
-    await user.click(within(proposal as HTMLElement).getByRole('button', { name: 'Confirm action' }))
+    await user.click(within(proposal).getByRole('button', { name: 'Allow once' }))
 
     expect(screen.getByText(/Executed: Mock command completed/i)).toBeInTheDocument()
   })
 
-  it('shows only the current copilot execution steps', () => {
+  it('renders the TUI transcript: streaming text, execution steps, thinking, plan, permissions', () => {
     render(
       <CopilotPanel
-        vm={fixtureVms[0]}
-        activeTab="overview"
+        scope="vm:vm-orchid"
+        scopeLabel="orchid-build-01"
+        runtime={{ driver: 'mock', state: 'ready' }}
         messages={[
-          {
-            id: 'msg-user-2000000000000',
-            role: 'user',
-            content: 'Check runtime',
-            timestamp: '00:00',
-            contextVmId: fixtureVms[0].id,
-            contextTab: 'overview',
-          },
+          { id: 'm1', role: 'user', content: 'Check disk', timestamp: '00:00', scope: 'vm:vm-orchid', createdAt: 1 },
+          { id: 'm2', role: 'assistant', content: 'Checking', timestamp: '00:01', scope: 'vm:vm-orchid', createdAt: 7, streaming: true },
         ]}
-        progress={[
+        toolCalls={[
           {
-            id: 'copilot-progress-2000000000200',
-            vmId: fixtureVms[0].id,
-            title: 'Reading live runtime',
-            detail: 'systemctl and ps',
-            status: 'running',
-            timestamp: '00:01',
-          },
-          {
-            id: 'copilot-progress-2000000000100',
-            vmId: fixtureVms[0].id,
-            title: 'Queued copilot request',
-            detail: 'current request',
-            status: 'running',
-            timestamp: '00:01',
-          },
-          {
-            id: 'copilot-progress-1999999999200',
-            vmId: fixtureVms[0].id,
-            title: 'Old request finished',
-            detail: 'previous request',
+            id: 'think1',
+            scope: 'vm:vm-orchid',
+            title: 'Thinking',
+            kind: 'think',
+            origin: 'agent',
             status: 'completed',
-            timestamp: '23:59',
+            output: 'The disk alert points at /var.',
+            createdAt: 2,
+            updatedAt: 2,
           },
           {
-            id: 'copilot-progress-1999999999100',
-            vmId: fixtureVms[0].id,
-            title: 'Queued copilot request',
-            detail: 'old request',
-            status: 'running',
-            timestamp: '23:59',
+            id: 't1',
+            scope: 'vm:vm-orchid',
+            title: 'run_command',
+            kind: 'read',
+            status: 'completed',
+            detail: 'df -h',
+            output: 'line1\nline2\nline3\nline4\nline5\nline6\nline7',
+            createdAt: 3,
+            updatedAt: 4,
           },
         ]}
-        proposals={[]}
+        plans={[
+          {
+            id: 'plan1',
+            scope: 'vm:vm-orchid',
+            entries: [
+              { title: 'Inspect disk usage', status: 'completed' },
+              { title: 'Summarize findings', status: 'in_progress' },
+            ],
+            createdAt: 5,
+            updatedAt: 6,
+          },
+        ]}
+        progress={[{ id: 'p1', vmId: 'vm:vm-orchid', scope: 'vm:vm-orchid', title: 'Working', status: 'running', timestamp: '00:01' }]}
+        proposals={[
+          {
+            id: 'pr1',
+            vmId: 'vm-orchid',
+            scope: 'vm:vm-orchid',
+            title: 'Run on orchid-build-01',
+            description: 'Restart nginx',
+            command: 'sudo systemctl restart nginx',
+            actionType: 'custom_command',
+            risk: 'medium',
+            status: 'awaiting_confirmation',
+            createdAt: 8,
+          },
+        ]}
         isBusy
         onSendMessage={() => undefined}
-        onCreateProposal={() => undefined}
-        onConfirmProposal={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
       />,
     )
 
-    expect(screen.getByText('Current execution / 00:01')).toBeInTheDocument()
-    expect(screen.getByText('Reading live runtime')).toBeInTheDocument()
-    expect(screen.queryByText('Old request finished')).not.toBeInTheDocument()
-    expect(screen.queryByText('previous request')).not.toBeInTheDocument()
+    expect(screen.getByText(/Checking/)).toBeInTheDocument()
+    expect(screen.getByText('run_command')).toBeInTheDocument()
+    expect(screen.getByText(/df -h/)).toBeInTheDocument()
+    // A completed step collapses to a 2-line peek; the remaining lines hide behind an expander.
+    expect(screen.getByText(/\+5 lines/)).toBeInTheDocument()
+    expect(screen.getByText('Thought')).toBeInTheDocument()
+    expect(screen.getByText('Plan')).toBeInTheDocument()
+    expect(screen.getByText('Inspect disk usage')).toBeInTheDocument()
+    expect(screen.getByText('Summarize findings')).toBeInTheDocument()
+    expect(screen.getByText('Run on orchid-build-01')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+  })
+
+  it('expands truncated step output and collapsed thinking on click', async () => {
+    const user = userEvent.setup()
+    render(
+      <CopilotPanel
+        scope="vm:vm-orchid"
+        scopeLabel="orchid-build-01"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[]}
+        toolCalls={[
+          {
+            id: 'think1',
+            scope: 'vm:vm-orchid',
+            title: 'Thinking',
+            kind: 'think',
+            origin: 'agent',
+            status: 'completed',
+            output: 'Hidden reasoning text.',
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          {
+            id: 't1',
+            scope: 'vm:vm-orchid',
+            title: 'get_vm',
+            kind: 'read',
+            origin: 'agent',
+            status: 'completed',
+            output: 'a\nb\nc\nd\ne\nf\ng\nh',
+            createdAt: 2,
+            updatedAt: 2,
+          },
+        ]}
+        plans={[]}
+        progress={[]}
+        proposals={[]}
+        isBusy={false}
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    expect(screen.queryByText('Hidden reasoning text.')).not.toBeInTheDocument()
+    await user.click(screen.getByText('Thought'))
+    expect(screen.getByText('Hidden reasoning text.')).toBeInTheDocument()
+
+    // The completed step shows a short peek; the full output reveals on click.
+    expect(screen.queryByText(/a b c d e f g h/)).not.toBeInTheDocument()
+    await user.click(screen.getByText(/\+6 lines/))
+    expect(screen.getByText(/a b c d e f g h/)).toBeInTheDocument()
+    expect(screen.getByText('collapse')).toBeInTheDocument()
+  })
+
+  it('groups the transcript into turns and keeps cross-turn steps from colliding', () => {
+    const { container } = render(
+      <CopilotPanel
+        scope="vm:vm-orchid"
+        scopeLabel="orchid-build-01"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[
+          { id: 'u1', role: 'user', content: 'First question', timestamp: '00:00', scope: 'vm:vm-orchid', createdAt: 1 },
+          { id: 'a1', role: 'assistant', content: 'First answer', timestamp: '00:01', scope: 'vm:vm-orchid', createdAt: 4 },
+          { id: 'u2', role: 'user', content: 'Second question', timestamp: '00:02', scope: 'vm:vm-orchid', createdAt: 5 },
+          { id: 'a2', role: 'assistant', content: 'Second answer', timestamp: '00:03', scope: 'vm:vm-orchid', createdAt: 8 },
+        ]}
+        toolCalls={[
+          // Same agent step id shape across turns must stay two distinct cards (server now
+          // scopes ids per turn); here they already differ and must land in the right turn.
+          { id: 'agent-a1-1', scope: 'vm:vm-orchid', title: 'list_files', kind: 'read', origin: 'agent', status: 'completed', detail: '/etc', output: 'hosts', createdAt: 2, updatedAt: 2 },
+          { id: 'agent-a2-1', scope: 'vm:vm-orchid', title: 'list_files', kind: 'read', origin: 'agent', status: 'completed', detail: '/var', output: 'log', createdAt: 6, updatedAt: 6 },
+        ]}
+        plans={[]}
+        progress={[]}
+        proposals={[]}
+        isBusy={false}
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    // Both prompts and both answers render exactly once.
+    expect(screen.getByText('First question')).toBeInTheDocument()
+    expect(screen.getByText('Second question')).toBeInTheDocument()
+    expect(screen.getByText('First answer')).toBeInTheDocument()
+    expect(screen.getByText('Second answer')).toBeInTheDocument()
+    expect(screen.getAllByText('list_files')).toHaveLength(2)
+
+    // Document order is: First question, its step (/etc), First answer, Second question,
+    // its step (/var), Second answer — steps stay anchored under the turn that produced them.
+    const text = container.textContent ?? ''
+    const order = ['First question', '/etc', 'First answer', 'Second question', '/var', 'Second answer'].map((needle) =>
+      text.indexOf(needle),
+    )
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    expect(order.every((index) => index >= 0)).toBe(true)
+  })
+
+  it('only makes the oldest awaiting proposal actionable when several are pending', () => {
+    const base = {
+      vmId: 'vm-orchid',
+      scope: 'vm:vm-orchid' as const,
+      actionType: 'custom_command' as const,
+      risk: 'medium' as const,
+      status: 'awaiting_confirmation' as const,
+    }
+    render(
+      <CopilotPanel
+        scope="vm:vm-orchid"
+        scopeLabel="orchid-build-01"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[]}
+        toolCalls={[]}
+        plans={[]}
+        progress={[]}
+        proposals={[
+          { ...base, id: 'pr1', title: 'Restart nginx', description: 'first', command: 'sudo systemctl restart nginx', createdAt: 1 },
+          { ...base, id: 'pr2', title: 'Clear cache', description: 'second', command: 'sudo rm -rf /tmp/cache', createdAt: 2 },
+        ]}
+        isBusy={false}
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    // Exactly one set of decision buttons: the older card's.
+    expect(screen.getAllByRole('button', { name: 'Allow once' })).toHaveLength(1)
+    expect(screen.getByText('Queued — decide the command above first.')).toBeInTheDocument()
+    expect(screen.getByText('sudo systemctl restart nginx').closest('article')).toContainElement(
+      screen.getByRole('button', { name: 'Allow once' }),
+    )
+  })
+
+  it('acknowledges a decided proposal with an executing state instead of buttons', () => {
+    render(
+      <CopilotPanel
+        scope="vm:vm-orchid"
+        scopeLabel="orchid-build-01"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[]}
+        toolCalls={[]}
+        plans={[]}
+        progress={[]}
+        proposals={[
+          {
+            id: 'pr1',
+            vmId: 'vm-orchid',
+            scope: 'vm:vm-orchid',
+            title: 'Run on orchid-build-01',
+            description: 'Restart nginx',
+            command: 'sudo systemctl restart nginx',
+            actionType: 'custom_command',
+            risk: 'medium',
+            status: 'awaiting_confirmation',
+            decision: 'allow_once',
+            createdAt: 1,
+          },
+        ]}
+        isBusy={false}
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    expect(screen.getByText('Allowed — executing…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Allow once' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Deny' })).not.toBeInTheDocument()
+  })
+
+  it('renders completed assistant messages as formatted markdown', () => {
+    render(
+      <CopilotPanel
+        scope="fleet"
+        scopeLabel="All VMs"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[
+          {
+            id: 'm1',
+            role: 'assistant',
+            content:
+              '## Disk report\n\nThe partition `/dev/sda1` is **almost full**.\n\n- clean `/var/log`\n- see [docs](https://example.com/docs)\n\n```bash\ndf -h /var\n```',
+            timestamp: '00:01',
+            scope: 'fleet',
+            createdAt: 1,
+          },
+        ]}
+        toolCalls={[]}
+        plans={[]}
+        progress={[]}
+        proposals={[]}
+        isBusy={false}
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Disk report' })).toBeInTheDocument()
+    expect(screen.getByText('/dev/sda1')).toBeInTheDocument()
+    expect(screen.getByText('almost full')).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: 'docs' })
+    expect(link).toHaveAttribute('href', 'https://example.com/docs')
+    expect(screen.getByText('bash')).toBeInTheDocument()
+    expect(screen.getByText('df -h /var')).toBeInTheDocument()
   })
 })

@@ -2,280 +2,331 @@
 
 Last updated: 2026-06-11
 
-This file is the living working spec for Grove Copilot. Keep it updated whenever we change copilot behavior, VM state tracking, operation execution, or SSH/SFTP connection handling.
+This file is the living working spec for Grove Copilot. Keep it updated whenever we change
+copilot behavior, scopes, MCP tools, the kimi runtime, the permission flow, the journal, the
+mutation lock, or SSH/SFTP connection handling. When implementation and this file disagree,
+treat implementation as the current truth, then update this file in the same change.
 
 ## Current Role
 
-Grove Copilot is intended to be the main actor for VM operations, but the current implementation keeps it inside strict local backend boundaries:
+Grove Copilot is the center stage of Grove and the primary actor for VM operations. Its
+brain is **kimi-code CLI** running **locally** on the user's machine; Grove is the only path
+to a VM. The division of trust:
 
-- The React UI gathers the selected VM, active tab, chat text, proposals, and progress UI.
-- The local Node backend owns all real SSH, SFTP, terminal, inventory, activity, and provider work.
-- Moonshot/Kimi is used only through the backend agent in `server/copilotAgent.ts`.
-- Copilot can directly run read-only inspections on the selected VM.
-- Copilot cannot directly mutate a VM from free-form chat. Mutating work must become an `ActionProposal`, and only a confirmed proposal runs SSH commands.
-- Copilot never types into the user's live terminal. Interactive terminal sessions and copilot command runs use separate SSH channels.
+- **kimi-code CLI** = reasoning, planning, tool selection, conversational memory.
+- **Grove backend** = transport, credentials, command classification, confirmation, audit,
+  journaling, and the only SSH/SFTP path to a VM.
+
+kimi reaches VM operations exclusively through Grove's scoped **MCP** tools. It never holds
+SSH keys, never opens its own SSH connection, and never types into the user's live terminal.
+Mutating commands pause mid-turn for explicit user confirmation before they execute.
+
+## Scopes
+
+```ts
+type CopilotScope = 'fleet' | `vm:${string}`   // src/types.ts
+```
+
+- **fleet** — the "All VMs" sidebar entry. Fleet-wide context and fleet-only tools.
+- **vm:<id>** — a focused single machine. Selecting a VM in the sidebar sets this scope.
+
+Each scope is independent: its own kimi session, workspace, journal file, busy state, and
+timeline. The UI keys messages, tool calls, proposals, progress, and busy state by scope.
 
 ## Source Map
 
 - Shared contracts: `src/types.ts`
-  - `VM`, `VMMetrics`, `ServiceInfo`, `ProcessInfo`, `ActivityEvent`
-  - `TransferJob`, `CommandRun`, `TerminalSession`
-  - `CopilotMessage`, `CopilotProviderStatus`, `CopilotProgressEvent`
-  - `ActionProposal`, `AppSnapshot`, `ServerEvent`
-- Backend routes: `server/app.ts`
-  - HTTP validation and route-to-store delegation.
-- Backend runtime state: `server/store.ts`
-  - `GroveStore` owns VM arrays, transfer jobs, copilot messages, proposals, event publication, and activity entries.
-- Copilot agent: `server/copilotAgent.ts`
-  - Builds Kimi prompts, exposes tool schemas, loops through tool calls, classifies read-only SSH commands, and formats tool results.
-- Command safety: `server/commandProfiles.ts`
-  - `classifyCommand` and mutating command patterns.
-- SSH/SFTP/terminal transport: `server/sshSessionManager.ts`
-  - `SshSessionManager`, `MockSshSessionManager`, and `RealSshSessionManager`.
-- WebSocket bridge: `server/index.ts`
-  - `WS /api/events` and `WS /api/vms/:vmId/terminal`.
-- Frontend API client: `src/lib/api.ts`
-  - Copilot routes, snapshot loading, event socket, terminal socket.
-- Frontend state shell: `src/App.tsx`
-  - Snapshot hydration, event handling, copilot busy/progress state, proposal creation/confirmation.
-- Copilot UI: `src/components/CopilotPanel.tsx`
-  - Chat timeline, current execution progress, suggestions, proposal cards, confirmation button.
-- Terminal UI: `src/components/TerminalTab.tsx`
-  - Interactive PTY sessions; explicitly displays that copilot uses separate SSH exec/SFTP channels.
+  - `CopilotScope`, `vmScope`, `scopeVmId`
+  - `CopilotMessage` (`scope`, `createdAt`, `streaming`), `CopilotToolCall` (`origin`
+    distinguishes Grove-executed steps from agent-reported ones; `kind: 'think'` is a
+    streamed thought block), `CopilotPlanState`/`CopilotPlanEntry`,
+    `CopilotPermissionDecision`, `CopilotRuntimeStatus`, `CopilotProgressEvent`,
+    `ActionProposal` (`scope`, `targetVmIds`, `toolCallId`, `decision`, `awaiting_confirmation`)
+  - `AppSnapshot` (adds `toolCalls`, `plans`, `runtime`), `ServerEvent` (adds `copilot.delta`,
+    `copilot.toolcall.updated`, `copilot.plan`, `copilot.runtime`)
+- Backend routes: `server/app.ts` — validation, MCP mount, UI-token gate, scoped routes.
+- Backend runtime state: `server/store.ts` — `GroveStore` implements `CopilotToolHost`; owns
+  messages, tool calls, proposals, the per-VM mutation lock, pending permissions, journal
+  hydration, and event publication.
+- Driver contracts: `server/copilotTypes.ts` — `CopilotToolHost`, `CopilotDriver`,
+  `DriverUpdate`, `PromptRequest`, `McpServerSpec`, `ToolResult`.
+- Supervisor: `server/copilotSupervisor.ts` — owns the kimi process/driver, per-scope
+  workspace + generated `AGENTS.md`, scoped MCP config, notes.
+- Drivers: `server/drivers/acpDriver.ts`, `server/drivers/printDriver.ts`,
+  `server/drivers/mockDriver.ts`.
+- ACP transport: `server/acpClient.ts` — newline-delimited JSON-RPC over child stdio.
+- MCP layer: `server/mcp/tools.ts` (scoped tool registry), `server/mcp/endpoint.ts`
+  (HTTP endpoint + `ScopeTokenRegistry`), `server/mcp/groveStdioProxy.mjs` (stdio bridge
+  kimi spawns).
+- Provider/config: `server/copilotProvider.ts` — Moonshot env + generated kimi config file.
+- Safety: `server/commandProfiles.ts` — `classifyCommand`, `isReadOnlyCommand`,
+  `readOnlyCommandPrefixes`.
+- Policy: `server/copilotPolicy.ts` — "always allow" rules.
+- History: `server/copilotJournal.ts` — append-only JSONL per scope.
+- Mutation lock: `server/mutationLock.ts` — `KeyedMutex`.
+- API token: `server/apiToken.ts` — per-boot UI bearer token + middleware.
+- Frontend client: `src/lib/api.ts` — bootstrap/token handshake, scoped routes, events.
+- Frontend shell: `src/App.tsx` — scope state, event handling, rAF delta batching.
+- UI: `src/components/Sidebar.tsx` (All VMs + per-VM, busy/attention markers),
+  `src/components/CopilotPanel.tsx` (TUI-style transcript: execution steps, thinking,
+  plan checklist, permission cards, Stop/Esc), `src/components/Markdown.tsx`
+  (dependency-free markdown renderer for assistant output).
 
-## VM And Fleet State
+## kimi Runtime And Drivers
 
-The core state shape is `AppSnapshot`:
+The supervisor talks to one `CopilotDriver`. Selection (`server/copilotSupervisor.ts`):
 
-```ts
-{
-  vms: VM[]
-  transfers: TransferJob[]
-  messages: CopilotMessage[]
-  proposals: ActionProposal[]
-}
-```
+- `GROVE_USE_FIXTURES=true` or `GROVE_COPILOT_DRIVER=mock` → **MockDriver** (tests, offline).
+- `GROVE_COPILOT_DRIVER=acp` → **AcpDriver** (one warm `kimi acp` process, many sessions;
+  needs `kimi login` or a config providing credentials).
+- default → **PrintDriver**: `kimi --print --output-format stream-json --yolo --work-dir
+  <scope-workspace> --mcp-config-file <scope-mcp.json> --session <scope> --config-file
+  <grove-kimi-config>`. Works non-interactively with the saved Moonshot key, no global login.
 
-`GroveStore` keeps this state in memory. VM connection definitions are loaded from `.grove/inventory.yaml` through `server/inventory.ts`, unless fixtures are enabled or the inventory is missing. AppRunner service metadata is loaded separately from `.grove/apprunner.yaml`.
+The default is print mode because it runs with the user's saved key via a Grove-local config
+file (`.grove/runtime/kimi-config.toml`, generated from `GROVE_MOONSHOT_*`, never committed,
+never put in any agent-readable workspace). `--yolo` auto-approves kimi's *built-in* tools
+only; Grove's MCP layer still gates every mutating VM command. ACP is available for warm,
+streamed, cancellable turns once the user has logged kimi in.
 
-Each VM object combines three kinds of state:
+`DriverUpdate` values (`message_delta`, `thought`, `tool_call`, `plan`, `progress`) are the
+common stream the store translates into Grove events regardless of driver.
 
-- Inventory identity and connection metadata: id, name, host, user, port, key label, OS, labels, provider.
-- Runtime sample state: lifecycle, health, metrics, services, processes, alerts, last connected, SSH test status.
-- Operation history: VM-local `activity`, plus globally visible `TransferJob`, `CopilotMessage`, `CopilotProgressEvent`, and `ActionProposal` events.
+## Execution Step Surfacing
 
-`GroveStore.refreshAllVmInfoOnce()` refreshes every VM on first snapshot/list request, unless fixtures are enabled. It uses `Promise.allSettled`, so a failed VM refresh does not block the rest of the fleet.
+Everything the agent does during a turn is a first-class timeline item, mirroring the
+kimi-code TUI (`GroveStore.applyDriverUpdate`):
 
-`GroveStore.refreshVmInfo(vmId)` runs a generated read-only shell command over SSH. The command emits marked sections for metrics, processes, and services. The store parses stdout into `VMMetrics`, `ProcessInfo[]`, and `ServiceInfo[]`, then replaces that VM in the `vms` array and publishes `vm.updated`.
+- **Agent tool calls** (`tool_call` updates) upsert a `CopilotToolCall` with
+  `origin: 'agent'` and id `agent-<scope>-<callId>`, streaming status
+  pending → running → completed/failed with args (`detail`) and output. Updates whose
+  normalized title names a tool Grove instruments itself (`run_command`, `read_logs`,
+  `service_status`, `list_files`, `fleet_run_command`, `inspect_vm`, `diagnose_service`)
+  are **dropped** — the Grove-side
+  card created by the tool host (real command, real SSH output, linked proposal) is the
+  single authoritative step. Uninstrumented MCP reads (`get_vm`, `list_vms`,
+  `get_history`, `record_note`) and kimi's built-in tools surface from the agent's view.
+- **Thought chunks** stream into one open think-block per run (`CopilotToolCall` with
+  `kind: 'think'`, `origin: 'agent'`, text in `output`). The block closes (status
+  `completed`) when any non-thought update arrives or the turn ends; it is journaled once
+  on close, not per chunk.
+- **Plan updates** upsert one `CopilotPlanState` per turn (`plan-<assistantMessageId>`),
+  published as `copilot.plan` and journaled; entries tick pending → in_progress →
+  completed in place.
+- **Answer anchoring**: the assistant message's `createdAt` is re-set to the arrival of its
+  first text token, so the timeline reads steps-then-answer like the TUI transcript.
+- Tool output stored on cards preserves line structure (`clipBlock`, capped at 200
+  lines/8k chars) rather than being flattened to one line.
 
-Fleet operations currently do not have a separate persistent operation object. They are represented by:
+## MCP Tool Layer
 
-- one proposal, usually `actionType: "patch_vms"`;
-- one `CommandRun` per target VM at confirmation time;
-- one activity entry per target VM;
-- a proposal result string summarizing per-VM outcomes.
+Grove is an MCP server. kimi spawns `server/mcp/groveStdioProxy.mjs` (a dependency-free Node
+stdio script) which forwards `tools/list` and `tools/call` to the backend over loopback HTTP
+with a scope token. The backend builds the tool set per scope (`buildToolsForScope`):
 
-Important current behavior: a fleet patch proposal computes its title/description from running VMs when the proposal is created, but confirmation recalculates `runningVms(this.vms)` from live store state. Future work should decide whether fleet proposals should freeze their target set or intentionally stay live.
+Shared (both scopes): `list_vms`, `get_vm`, `get_history`, `record_note`, and `inspect_vm`
+(composite: refreshes and returns live metrics + services + top processes in **one SSH
+round-trip**, reusing the UI refresh path; vmId pinned in vm scope, required argument in
+fleet scope).
+VM scope only: `run_command`, `read_logs`, `service_status`, `list_files` (vmId is pinned,
+never an argument), and `diagnose_service` (composite: systemctl status + recent journal +
+listening ports for one unit in one exec).
+Fleet scope only: `fleet_run_command` — once confirmed, targets run in **parallel** with
+bounded concurrency (default 4, `GROVE_FLEET_CONCURRENCY`), still serialized per VM by the
+mutation lock; results aggregate in target order.
 
-## Copilot Chat Flow
+Latency posture: the per-scope AGENTS.md steers the agent toward the composite tools and
+toward packing multiple read-only probes into a single `run_command` script. The backend
+warms the VM's SSH connection when a vm-scope prompt arrives (handshake overlaps kimi
+startup), and every exec carries a timeout (120s read / 600s mutating, `timeoutMs` to
+override) so a hung command fails the tool call instead of hanging the turn.
 
-1. The frontend calls `POST /api/copilot/messages` via `sendCopilotMessage({ vmId, activeTab, message })`.
-2. `server/app.ts` validates `vmId`, `activeTab`, and `message`, then calls `GroveStore.sendCopilotMessage`.
-3. The store creates and publishes a user `CopilotMessage`.
-4. The store publishes a `copilot.progress` event: `Queued copilot request`.
-5. The store builds a per-request `CopilotToolRuntime` and calls `copilot.respond(...)`.
-6. `CopilotAgent` builds Kimi messages with:
-   - system instructions;
-   - selected VM summary;
-   - fleet summary;
-   - selected VM transfer summary;
-   - recent VM-scoped chat history;
-   - current user message.
-7. Kimi may answer directly or call tools.
-8. Tool calls are executed by the store-provided runtime.
-9. The store records read-only `CommandRun`s as `Copilot SSH inspection` activity entries.
-10. The store persists any generated proposals in memory and publishes `copilot.proposal.updated`.
-11. The store creates and publishes the assistant `CopilotMessage`.
-12. The store publishes final `copilot.progress`: `Copilot response ready`.
+**Scope enforcement is physical, not prompt-based.** Each scope gets a random per-boot token
+(`ScopeTokenRegistry`) carried in the MCP config's env. A `vm:<id>` session literally has no
+tool that accepts another vmId and no fleet tool; a fleet session has no single-VM mutators.
 
-The agent has a fixed tool-loop budget (`MAX_TOOL_LOOPS = 5`). If Kimi repeatedly asks for tools, the agent asks for a final no-tool response. If that fails, it locally summarizes recent tool evidence.
+## Permission Flow
 
-## Copilot Tools
+`run_command` and `fleet_run_command` are the gate (`GroveStore.runScopedCommand` /
+`fleetRunCommand`):
 
-The current tool schema in `server/copilotAgent.ts` exposes:
+1. Read-only command (`isReadOnlyCommand`) → runs immediately over SSH, recorded as a tool
+   call + activity, result returned to kimi in the same turn.
+2. Policy allows it (`CopilotPolicy.allows`) → executes without a new prompt.
+3. Otherwise → an `ActionProposal` with status `awaiting_confirmation` is created and the
+   tool call **blocks** (`awaitDecision`) until the user decides or a 10-minute timeout
+   denies it.
 
-- `inspect_system`
-  - Built-in diagnostics only.
-  - Current checks: `shadowsocks_running`, `shadowsocks_installed`.
-  - Runs predefined read-only shell scripts through SSH exec.
-- `ssh_exec`
-  - Read-only SSH exec on the selected VM.
-  - Rejected unless `isAgentReadOnlyCommand(command)` approves it.
-- `sftp_list`
-  - Lists remote files over SFTP on the selected VM.
-- `create_known_proposal`
-  - Creates one built-in proposal type.
-  - Current types: `inspect_logs`, `restart_service`, `snapshot`, `transfer_file`, `explain_metrics`, `patch_vms`.
-- `propose_ssh_command`
-  - Creates a `custom_command` proposal. It does not execute immediately.
-- `plan_sftp_transfer`
-  - Creates a `transfer_file` proposal. It does not execute the transfer.
+Decisions (`POST /api/copilot/proposals/:id/decision`, body `{ decision }`):
 
-Tool results are compacted before returning to Kimi. Command stdout and stderr are truncated in `toolResultFromCommandRun` to keep prompts bounded.
+- `allow_once` → resume the tool call, execute under the per-VM mutation lock, return output.
+- `always_allow` → same, plus a narrow `scope + command-prefix` rule saved to
+  `.grove/copilot/policy.yaml`.
+- `deny` → tool call returns a structured refusal; kimi adapts.
 
-## Operation And Proposal Flow
+`/confirm` remains as an `allow_once` alias. Suggestion-button proposals
+(`POST /api/copilot/proposals`) still execute directly via `runLegacyProposal`.
 
-There are two proposal creation paths:
+Fleet commands **freeze their target VM list** when the proposal is created, run one SSH
+command per target under the lock, and report per-VM results. The copilot still never writes
+to the interactive terminal stream.
 
-- User clicks a suggestion in `CopilotPanel`.
-  - Frontend calls `POST /api/copilot/proposals`.
-  - Store calls `proposalFor(...)`.
-- Kimi asks for a proposal tool during chat.
-  - Store runtime appends the proposal to a per-request `proposals` array.
-  - After the response, proposals are prepended to store state and published.
+## Concurrency: Per-VM Mutation Lock
 
-Confirmation path:
+`KeyedMutex` (`server/mutationLock.ts`) serializes mutating work per VM id across all
+sources — copilot tool calls from any scope, confirmed proposals, fleet runs. Read-only
+inspections bypass the lock. A queued call publishes "Queued behind work on <vm>" progress.
 
-1. User clicks `Confirm action` in `CopilotPanel`.
-2. Frontend calls `POST /api/copilot/proposals/:proposalId/confirm`.
-3. Store finds the proposal by id.
-4. For `patch_vms`, store loops over live running VMs and runs the proposal command once per VM with `actor: "copilot"` and `mutating: true`.
-5. For all other proposal types, store runs the proposal command on `proposal.vmId` with `actor: "copilot"` and mutating status from `classifyCommand`.
-6. Store updates proposal status to `executed` on command success, or `dismissed` on command failure/no fleet targets.
-7. Store adds activity entries with `proposalId` and `commandRunId`.
-8. Store publishes `copilot.proposal.updated` and `activity.created`.
+## History Memory
 
-Current caveat: `transfer_file` proposals confirm by running the displayed `sftp ...` command through SSH exec. They do not yet execute the structured transfer plan via `createTransfer`.
+Three layers:
 
-## SSH, SFTP, And Terminal Connections
+1. **kimi sessions** — per-scope conversational memory (`--session <scope>`), resumable.
+2. **Operation journal** (`server/copilotJournal.ts`) — append-only JSONL per scope under
+   `.grove/copilot/journal/`. Records messages, tool calls, proposals, and plans
+   (upsert-by-id, last write wins). Hydrates the UI timeline on backend restart
+   (`GroveStore` constructor) and backs the `get_history` tool. Disabled in fixtures/test
+   mode so tests never touch real `.grove`. On load it **reconciles** interrupted work:
+   streaming messages are finalized, running tool calls become `failed` (interrupted
+   think-blocks become `completed` — a thought has no failure mode),
+   `awaiting_confirmation` proposals become re-runnable `pending_confirmation` drafts.
+3. **Distilled notes** (`notes.md` per scope workspace) — written by the `record_note` tool,
+   read natively by kimi on session start.
 
-All VM connectivity goes through `SshSessionManager`.
+## Scope Workspaces
 
-`RealSshSessionManager` uses `ssh2` and caches one SSH client promise per VM id:
-
-```ts
-private readonly clients = new Map<string, Promise<Client>>()
-```
-
-The cached client is shared by operation type, but each operation opens its own channel:
-
-- Metrics, AppRunner, user commands, and copilot inspections use `client.exec(command)`.
-- Remote file listing and transfers use `client.sftp(...)`.
-- Interactive terminal sessions use `client.shell(...)`.
-
-Connection details come from `VM.connection`:
-
-- `host`
-- `port`
-- `user`
-- `keyLabel`
-
-`keyLabel` is resolved through `resolveProjectStateReference`:
-
-- `~/...` resolves under the OS home directory.
-- absolute paths stay absolute.
-- relative paths resolve under `.grove/`.
-
-If the key exists, it is read and passed as `privateKey`. If no private key is available, the current code does not explicitly enable agent forwarding; it relies on ssh2 defaults and the provided config.
-
-`executeCommand` retries once on channel-open style failures:
-
-- "channel open failure"
-- "open failed"
-- "session open refused"
-
-For those failures it evicts and ends the cached client, then runs once more on a fresh connection.
-
-Late SSH client errors remove the cached client. The next operation creates a new SSH connection.
-
-## Terminal Separation
-
-The terminal WebSocket path is:
+`.grove/copilot/` holds per-scope state:
 
 ```text
-WS /api/vms/:vmId/terminal
+.grove/copilot/
+  journal/<scope>.jsonl       # operation journal
+  policy.yaml                 # always-allow rules
+  mcp/<scope>.json            # kimi --mcp-config-file pointing at the stdio proxy + token
+  workspaces/<scope>/
+    AGENTS.md                 # generated, stable facts only; refreshed each prompt
+    notes.md                  # agent-maintained durable memory
 ```
 
-`server/index.ts` opens `GroveStore.openTerminalShell`, returns a `TerminalSession`, and bridges browser messages to an SSH PTY stream.
+`AGENTS.md` contains only **stable** facts (identity, connection, tracked services, how to
+use the tools, fleet siblings). Volatile runtime state (metrics/health/processes) is
+deliberately excluded — long-lived sessions fetch it live via `get_vm`/`run_command`.
 
-Copilot does not write to that stream. Copilot uses:
+## Security: UI Bearer Token
 
-- `executeCommand` for SSH exec;
-- `listFiles` for SFTP listing;
-- proposal confirmation for mutating commands.
+`server/apiToken.ts` generates a per-boot token (`generateUiToken`), persisted to
+`.grove/runtime/ui-token`. Mutating HTTP routes require it in `x-grove-token`
+(`uiTokenMiddleware`); reads, `/api/health`, `/api/bootstrap`, and `/api/mcp/*` are exempt
+(MCP carries its own scope token). The UI fetches the token from `/api/bootstrap` at load
+(`setApiToken`). The token never appears in any agent context, workspace file, or MCP
+config, so a co-resident kimi process cannot reach mutating routes by `curl localhost` — its
+only path to a VM is its own scoped MCP endpoint. This is defense-in-depth for a single-user
+local tool, not an absolute boundary against same-user code.
 
-This is a central invariant. Future copilot features may offer "insert into terminal" as an explicit user action, but automatic typing into a live terminal should remain out of bounds.
+## Frontend State And Streaming
+
+`src/App.tsx` hydrates from `/api/bootstrap` (token + runtime) and `/api/snapshot`, then
+subscribes to `WS /api/events`. The events socket **auto-reconnects with backoff**
+(`createEventsSocket` in `src/lib/api.ts`): the dev backend restarts on every server-file
+save, which would otherwise leave an open tab deaf and — because the UI token is per-boot —
+unable to perform any mutating action. On each (re)connection the server pushes a fresh
+`snapshot`, and the client re-runs the bootstrap handshake to pick up the rotated token.
+Scope-relevant events:
+
+- `snapshot` — replaces vms/transfers/messages/proposals/toolCalls/plans/runtime.
+- `copilot.message` — append/replace (clears the delta buffer when finalized; also
+  re-published when the first answer token re-anchors the message's `createdAt`).
+- `copilot.delta` — token chunks, buffered and flushed once per `requestAnimationFrame` so a
+  token stream costs one render per frame, not per token.
+- `copilot.toolcall.updated` — upsert execution steps (grove + agent + think blocks).
+- `copilot.plan` — upsert the turn's plan checklist.
+- `copilot.progress` — drives per-scope busy state and the working indicator.
+- `copilot.proposal.updated` — upsert permission/suggestion cards.
+- `copilot.runtime` — kimi driver/state for the panel header and Settings.
+
+`CopilotPanel` renders a single scope's interleaved timeline as a kimi-code-TUI-style
+transcript:
+
+- user input echoed as a `>`-prefixed monospace line;
+- execution steps as `⏺ title(args)` lines with status-colored bullets (pulsing while
+  running, green/red on completion) and `⎿`-connected output blocks, previewing the first
+  5 lines with a `… +N lines` expander;
+- thought blocks as dim italic `✻ Thinking…` text, live while streaming and collapsed
+  behind a `Thought` toggle once closed;
+- the plan as a checklist that ticks off in place (☐ pending, ▸ in progress, ✓ completed
+  with strikethrough);
+- permission cards with Allow once / Always allow / Deny and the exact command; a decided
+  card acknowledges the click immediately ("Allowed — executing…" with the buttons gone,
+  optimistically client-side and via a broadcast decision update server-side) and flips to
+  Executed/Dismissed when the command finishes;
+- **one confirmation at a time, in order**: a per-scope queue in the store
+  (`requestConfirmation`) holds parallel gated tool calls so their cards surface strictly
+  in arrival order — the next card appears only once the previous one is decided, and a
+  queued call re-checks policy at the head so an always-allow grant skips its card. The
+  panel additionally renders buttons only on the oldest undecided card ("Queued — decide
+  the command above first." on the rest). Cancelling a scope releases its paused
+  confirmations as dismissed ("Cancelled.") so the queue never blocks the next turn;
+- completed assistant turns rendered as full markdown (`src/components/Markdown.tsx`:
+  headings, fenced code with language label, inline code, bold/italic/strikethrough,
+  links, nested + task lists, blockquotes, pipe tables, rules); the streaming message
+  stays plain text with a cursor until finalized (perf budget);
+- a `✻ <progress>… (esc to interrupt)` status line while busy; Esc and the Stop button
+  both cancel (`POST /api/copilot/cancel`).
+
+The sidebar shows an attention dot when a scope has an awaiting proposal and a spinner when
+a scope is busy, even when focused elsewhere.
+
+## Public Interfaces (copilot)
+
+HTTP:
+
+- `GET /api/bootstrap` — `{ token, runtime }`.
+- `POST /api/copilot/messages` — `{ scope, message }`.
+- `POST /api/copilot/cancel` — `{ scope }`.
+- `GET /api/copilot/runtime` — `CopilotRuntimeStatus`.
+- `POST /api/copilot/proposals` — suggestion-button proposal `{ vmId, activeTab, actionType }`.
+- `POST /api/copilot/proposals/:id/decision` — `{ decision }`.
+- `POST /api/copilot/proposals/:id/confirm` — `allow_once` alias.
+- `GET /api/copilot/provider`, `POST /api/copilot/provider` — Moonshot key (passed to kimi).
+- `GET /api/mcp/tools`, `POST /api/mcp/call` — scope-token-authenticated MCP endpoint.
+
+WebSocket: `WS /api/events` (adds `copilot.delta`, `copilot.toolcall.updated`,
+`copilot.plan`, `copilot.runtime`), `WS /api/vms/:vmId/terminal` (unchanged).
+
+When changing a public interface, update together: `src/types.ts`, `src/lib/api.ts`,
+`server/app.ts`, `server/store.ts`, and tests.
 
 ## Safety Boundaries
 
-Current read-only enforcement is layered:
+- `server/commandProfiles.ts` is the security boundary: `classifyCommand` flags mutating
+  patterns; `isReadOnlyCommand` requires both non-mutating classification and an approved
+  prefix from `readOnlyCommandPrefixes`. Treat changes here as security-sensitive.
+- Mutating commands always require explicit confirmation (or a stored always-allow rule).
+- Free-form chat needs a configured Moonshot key (for kimi) or kimi login; without it the
+  driver surfaces an error state instead of inventing a local answer mode.
+- The kimi config file embeds the API key and lives only under gitignored `.grove/runtime/`.
 
-- `server/commandProfiles.ts` marks obvious mutating patterns.
-- `isAgentReadOnlyCommand` rejects commands classified as mutating.
-- `isAgentReadOnlyCommand` also requires an approved prefix, such as `df`, `free`, `journalctl`, `ls`, `ps`, `ss`, `systemctl status`, `uptime`, and similar inspection commands.
-- Built-in Shadowsocks diagnostics are allowed by exact command string.
+## Testing And Offline Mode
 
-Mutating examples that must become proposals:
+`MockSshSessionManager` + `apiDisabled()` fixtures extend to the copilot via `MockDriver`,
+which replays scripted `DriverUpdate` sequences. Its default script walks the full update
+surface (thought, plan, tool-call lifecycle, streamed text) so offline development renders
+the same timeline a real kimi turn does. `GroveStore` accepts a `driver` option so tests
+inject a scripter. Covered in Vitest: streaming/scoped chat, agent step surfacing +
+grove-tool dedup, thought blocks, plan events and hydration, answer anchoring, read-only vs
+gated mutating commands, allow/deny decisions, cancel, scoped MCP tool exposure + auth,
+fleet-tool scoping, the UI token gate, journal hydration/reconciliation, and the mutation
+lock.
 
-- package operations;
-- service restart/start/stop/enable/disable;
-- file writes, deletes, moves, copies, ownership or mode changes;
-- reboot;
-- firewall changes;
-- process kills;
-- shell pipes from curl/wget into sh/bash.
+## Current Gaps And Future Work
 
-Provider safety:
-
-- Free-form copilot chat requires a configured Moonshot API key.
-- Settings writes `GROVE_MOONSHOT_API_KEY`, `GROVE_MOONSHOT_BASE_URL`, and `GROVE_MOONSHOT_MODEL` to `.grove/.env.local`.
-- The system prompt tells Copilot not to reveal API keys, private key contents, or hidden environment values.
-- Inventory validation rejects private key material and passwords.
-
-## Frontend State Handling
-
-`src/App.tsx` hydrates from `GET /api/snapshot` and subscribes to `WS /api/events`.
-
-Relevant event handling:
-
-- `snapshot` replaces VMs, transfers, messages, and proposals.
-- `vm.updated` upserts a VM.
-- `vm.deleted` removes a VM and selects another available VM.
-- `transfer.updated` upserts a transfer.
-- `copilot.message` appends/replaces a chat message.
-- `copilot.progress` updates per-VM progress and busy state.
-- `copilot.proposal.updated` upserts a proposal.
-
-`CopilotPanel` filters messages and proposals to the selected VM:
-
-- messages are shown if `contextVmId` is absent or matches the selected VM;
-- proposals are filtered by `proposal.vmId`;
-- progress passed to the panel is filtered by `event.vmId`.
-
-Current busy state is tracked by VM id in `copilotBusyByVm`. A running progress event sets that VM busy; a completed or failed progress event clears it.
-
-## Current Gaps And Design Questions
-
-- Fleet target set: should a `patch_vms` proposal freeze its target VM ids when created?
-- Structured operation tracking: multi-step or multi-VM operations currently live across proposals, command runs, progress events, and activity entries. A first-class `Operation` model would make Copilot easier to reason about as the main actor.
-- Structured SFTP proposals: `plan_sftp_transfer` creates a textual proposal, but confirmation does not call the transfer API.
-- Provider portability: Copilot is currently Moonshot-specific in types and route names.
-- SSH agent behavior: inventory supports `useAgent`, but `RealSshSessionManager.createClient` does not explicitly configure an agent socket.
-- Read-only command policy: prefix allowlists are simple and should be treated as security-sensitive.
-- VM connection status: `VmRuntimeState.connectionStatus` exists in types but is not wired as the primary runtime state model.
-- Operation cancellation: command runs and copilot requests have no cancellation path yet.
-- Concurrency visibility: the SSH client is shared per VM, but channel concurrency is not surfaced in UI or operation state.
-
-## Maintenance Rules For This File
-
-Update this file when:
-
-- adding or changing copilot tools;
-- changing proposal types or confirmation behavior;
-- changing SSH/SFTP/session management;
-- introducing operation state, cancellation, or multi-VM orchestration;
-- changing event payloads or route contracts;
-- changing safety classification or read-only policy;
-- changing frontend copilot progress/proposal/message behavior.
-
-When implementation and this file disagree, treat implementation as the current truth, then update this file in the same change.
+- ACP driver is implemented but secondary; print mode is the verified default. The ACP
+  `session/update` and `session/request_permission` shapes are mapped leniently and should be
+  pinned against a specific kimi ACP version when ACP becomes primary.
+- Print driver's `stream-json` parser is intentionally lenient across kimi versions; tighten
+  once the schema is stable.
+- `sftp_transfer` structured execution and long-running ops via `systemd-run` are designed in
+  `docs/copilot-redesign.md` but not yet built.
+- Policy management UI (list/revoke always-allow rules) and the terminal→copilot bridge are
+  planned (Phase 3 in the redesign doc).
+- Global attention surfacing is in the sidebar; a toast for off-scope permission requests is
+  still pending.

@@ -26,20 +26,21 @@ export function TransferQueue({ transfers, vms }: TransferQueueProps) {
   }
 
   return (
-    <aside className="border-t border-slate-200 bg-white">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-2">
+    <aside className="overflow-hidden rounded border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-3 py-2">
         <div>
           <h2 className="text-sm font-semibold text-slate-950">Transfer queue</h2>
           <p className="text-xs text-slate-500">Uploads, downloads, conflicts, and recent history</p>
         </div>
         <span className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500">{transfers.length} jobs</span>
       </div>
-      <div className="grid max-h-40 gap-2 overflow-auto p-3 md:grid-cols-2 xl:grid-cols-3">
+      {/* auto-fit tracks stretch the tiles across the full row regardless of job count. */}
+      <div className="grid max-h-56 grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-2 overflow-auto p-3">
         {transfers.map((job) => {
           const vm = vms.find((item) => item.id === job.vmId)
           const failed = job.status === 'failed' || job.status === 'conflict'
           return (
-            <div key={job.id} className="rounded border border-slate-200 bg-white p-2">
+            <div key={job.id} className="rounded border border-slate-200 bg-slate-50/50 p-2">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-700">
                   <span className={cx('text-slate-500', failed && 'text-rose-500')}>{iconForDirection(job.direction)}</span>

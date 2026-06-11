@@ -14,7 +14,6 @@ export type TransferDirection = 'upload' | 'download' | 'copy'
 
 export type TransferStatus = 'queued' | 'in_progress' | 'completed' | 'failed' | 'conflict'
 
-export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'failed'
 
 export type CommandStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
@@ -44,17 +43,6 @@ export interface VmConnectionInput {
   port: number
   pemPath: string
   os?: string
-  labels?: string[]
-}
-
-export interface VmRuntimeState {
-  vmId: string
-  health: VMHealth
-  lifecycle: LifecycleState
-  connectionStatus: ConnectionStatus
-  lastSeen: string
-  metrics: VMMetrics
-  alerts: string[]
 }
 
 export interface VMMetrics {
@@ -166,7 +154,6 @@ export interface VM {
     region: string
     node: string
   }
-  tags: string[]
   health: VMHealth
   lifecycle: LifecycleState
   connection: ConnectionProfile
@@ -240,14 +227,81 @@ export interface TerminalSession {
   lastActivityAt: string
 }
 
+/**
+ * Copilot context scope. `fleet` enables all-VM context; `vm:<id>` focuses one machine.
+ * The string form is used directly as a key across events, journals, and UI state.
+ */
+export type CopilotScope = 'fleet' | `vm:${string}`
+
+export function vmScope(vmId: string): CopilotScope {
+  return `vm:${vmId}`
+}
+
+export function scopeVmId(scope: CopilotScope): string | undefined {
+  return scope.startsWith('vm:') ? scope.slice(3) : undefined
+}
+
 export interface CopilotMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: string
+  scope?: CopilotScope
+  /** Epoch ms for stable timeline ordering across messages, tool calls, and proposals. */
+  createdAt?: number
+  /** True while assistant text is still streaming in via copilot.delta events. */
+  streaming?: boolean
   contextVmId?: string
   contextTab?: TabId
 }
+
+export type CopilotToolCallStatus = 'pending' | 'running' | 'completed' | 'failed'
+
+export type CopilotToolCallKind = 'read' | 'edit' | 'execute' | 'fetch' | 'think' | 'other'
+
+export interface CopilotToolCall {
+  id: string
+  scope: CopilotScope
+  title: string
+  kind: CopilotToolCallKind
+  status: CopilotToolCallStatus
+  /**
+   * Where the step was observed: 'grove' steps are executed by the Grove backend
+   * (authoritative command + output); 'agent' steps are kimi's own tool executions
+   * (built-in shell/file/web tools and uninstrumented MCP reads) streamed by the driver.
+   * Thought blocks stream as 'agent' steps with kind 'think'.
+   */
+  origin?: 'grove' | 'agent'
+  /** Target VM for VM-scoped tool calls. */
+  vmId?: string
+  /** Concrete command or argument detail, when meaningful. */
+  detail?: string
+  /** Truncated tool output for the timeline card. */
+  output?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export type CopilotPlanEntryStatus = 'pending' | 'in_progress' | 'completed'
+
+export interface CopilotPlanEntry {
+  title: string
+  status: CopilotPlanEntryStatus
+}
+
+/**
+ * The agent's live task checklist for one turn (ACP plan updates). One plan per turn,
+ * updated in place as entries tick off; it stays in the timeline as a record of the run.
+ */
+export interface CopilotPlanState {
+  id: string
+  scope: CopilotScope
+  entries: CopilotPlanEntry[]
+  createdAt: number
+  updatedAt: number
+}
+
+export type CopilotPermissionDecision = 'allow_once' | 'always_allow' | 'deny'
 
 export interface CopilotProviderStatus {
   provider: 'moonshot'
@@ -256,9 +310,20 @@ export interface CopilotProviderStatus {
   model: string
 }
 
+export type CopilotRuntimeState = 'starting' | 'ready' | 'error' | 'disabled'
+
+export interface CopilotRuntimeStatus {
+  driver: 'acp' | 'print' | 'mock'
+  state: CopilotRuntimeState
+  detail?: string
+  model?: string
+}
+
 export interface CopilotProgressEvent {
   id: string
+  /** Holds the scope string ('fleet' | 'vm:<id>'). Named vmId for back-compat. */
   vmId: string
+  scope?: CopilotScope
   title: string
   detail?: string
   status: 'running' | 'completed' | 'failed'
@@ -268,6 +333,9 @@ export interface CopilotProgressEvent {
 export interface ActionProposal {
   id: string
   vmId: string
+  scope?: CopilotScope
+  /** Frozen set of target VMs for fleet operations; defaults to [vmId]. */
+  targetVmIds?: string[]
   title: string
   description: string
   command: string
@@ -280,7 +348,11 @@ export interface ActionProposal {
     | 'patch_vms'
     | 'custom_command'
   risk: 'low' | 'medium' | 'high'
-  status: 'draft' | 'pending_confirmation' | 'executed' | 'dismissed'
+  status: 'draft' | 'pending_confirmation' | 'awaiting_confirmation' | 'executed' | 'dismissed'
+  /** Links a proposal back to the ACP tool call awaiting a permission decision. */
+  toolCallId?: string
+  decision?: CopilotPermissionDecision
+  createdAt?: number
   result?: string
 }
 
@@ -312,6 +384,15 @@ export interface AppSnapshot {
   transfers: TransferJob[]
   messages: CopilotMessage[]
   proposals: ActionProposal[]
+  toolCalls: CopilotToolCall[]
+  plans: CopilotPlanState[]
+  runtime: CopilotRuntimeStatus
+}
+
+export interface CopilotDeltaEvent {
+  scope: CopilotScope
+  messageId: string
+  delta: string
 }
 
 export type ServerEvent =
@@ -320,8 +401,12 @@ export type ServerEvent =
   | { type: 'vm.deleted'; payload: { vmId: string } }
   | { type: 'transfer.updated'; payload: TransferJob }
   | { type: 'copilot.message'; payload: CopilotMessage }
+  | { type: 'copilot.delta'; payload: CopilotDeltaEvent }
+  | { type: 'copilot.toolcall.updated'; payload: CopilotToolCall }
+  | { type: 'copilot.plan'; payload: CopilotPlanState }
   | { type: 'copilot.progress'; payload: CopilotProgressEvent }
   | { type: 'copilot.proposal.updated'; payload: ActionProposal }
+  | { type: 'copilot.runtime'; payload: CopilotRuntimeStatus }
   | { type: 'activity.created'; payload: AuditEvent }
   | { type: 'terminal.output'; payload: { sessionId: string; vmId: string; command?: string; output: string } }
   | { type: 'terminal.data'; payload: { sessionId: string; vmId: string; data: string } }

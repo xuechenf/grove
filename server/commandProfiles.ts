@@ -91,3 +91,80 @@ export function classifyCommand(command: string) {
     requiresConfirmation: mutating,
   }
 }
+
+/**
+ * Prefixes the copilot is allowed to run directly as read-only inspections. Anything not
+ * matched here (or classified mutating) must become a confirmation proposal first. This is
+ * a security-sensitive boundary; widen it deliberately.
+ */
+export const readOnlyCommandPrefixes = [
+  'awk',
+  'cat',
+  'command -v',
+  'date',
+  'df',
+  'dmesg',
+  'du',
+  'echo',
+  'find',
+  'free',
+  'getent',
+  'grep',
+  'head',
+  'hostname',
+  'id',
+  'ip ',
+  'journalctl',
+  'last',
+  'ls',
+  'lsblk',
+  'lscpu',
+  'lsof',
+  'nproc',
+  'pgrep',
+  'ps',
+  'pwd',
+  'sensors',
+  'ss',
+  'stat',
+  'sudo journalctl',
+  'sudo systemctl is-active',
+  'sudo systemctl is-enabled',
+  'sudo systemctl list-units',
+  'sudo systemctl status',
+  'systemctl is-active',
+  'systemctl is-enabled',
+  'systemctl list-units',
+  'systemctl list-unit-files',
+  'systemctl show',
+  'systemctl status',
+  'tail',
+  'top -b',
+  'uname',
+  'uptime',
+  'vmstat',
+  'wc',
+  'which',
+  'who',
+  'whoami',
+]
+
+/**
+ * True when a command is safe for the copilot to execute without an explicit confirmation
+ * proposal: not classified mutating, and starting with an approved read-only prefix.
+ */
+export function isReadOnlyCommand(command: string) {
+  const trimmed = command.trim()
+  if (!trimmed) {
+    return false
+  }
+
+  if (classifyCommand(trimmed).mutating) {
+    return false
+  }
+
+  const normalized = trimmed
+    .replace(/^timeout\s+\d+[smhd]?\s+/i, '')
+    .replace(/\s+/g, ' ')
+  return readOnlyCommandPrefixes.some((prefix) => normalized.startsWith(prefix))
+}

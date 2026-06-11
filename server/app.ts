@@ -1,8 +1,17 @@
 import express, { type NextFunction, type Request, type Response } from 'express'
 import { isIP } from 'node:net'
 import { z } from 'zod'
-import type { ActionProposal, AppRunnerServiceInput, TabId, TransferJob, VmConnectionInput } from '../src/types'
+import type {
+  ActionProposal,
+  AppRunnerServiceInput,
+  CopilotScope,
+  TabId,
+  TransferJob,
+  VmConnectionInput,
+} from '../src/types'
+import { uiTokenMiddleware } from './apiToken'
 import { listLocalFiles, localDefaults, openLocalFolder } from './localFiles'
+import { mountMcpEndpoint } from './mcp/endpoint'
 import { GroveStore } from './store'
 
 const transferRequestSchema = z.object({
@@ -37,10 +46,22 @@ const appRunnerServiceSchema = z.object({
   startCommand: z.string().trim().min(1),
 })
 
+const scopeSchema = z.custom<CopilotScope>(
+  (value) => typeof value === 'string' && (value === 'fleet' || value.startsWith('vm:')),
+  { message: 'scope must be "fleet" or "vm:<id>".' },
+)
+
 const copilotMessageSchema = z.object({
-  vmId: z.string(),
-  activeTab: tabSchema,
+  scope: scopeSchema,
   message: z.string().min(1),
+})
+
+const copilotCancelSchema = z.object({
+  scope: scopeSchema,
+})
+
+const copilotDecisionSchema = z.object({
+  decision: z.enum(['allow_once', 'always_allow', 'deny']),
 })
 
 const copilotProposalSchema = z.object({
@@ -72,7 +93,6 @@ const vmConnectionSchema = z.object({
   port: z.coerce.number().int().min(1).max(65535),
   pemPath: z.string().trim().min(1),
   os: z.string().trim().min(1).optional(),
-  labels: z.array(z.string().trim().min(1)).optional(),
 })
 
 type AsyncHandler = (request: Request, response: Response) => Promise<void>
@@ -111,13 +131,29 @@ function requireParam(value: string | string[] | undefined, name: string) {
   return value
 }
 
-export function createGroveApp(store = new GroveStore()) {
+export interface CreateGroveAppOptions {
+  /** When set, mutating routes require this token in the x-grove-token header. */
+  uiToken?: string
+}
+
+export function createGroveApp(store = new GroveStore(), options: CreateGroveAppOptions = {}) {
   const app = express()
 
   app.use(express.json())
 
+  // Scoped MCP endpoint (its own scope-token auth) must mount before the UI token gate.
+  mountMcpEndpoint(app, store, store.scopeTokens)
+
+  if (options.uiToken) {
+    app.use(uiTokenMiddleware(options.uiToken))
+  }
+
   app.get('/api/health', (_request, response) => {
     response.json({ ok: true, service: 'grove-backend' })
+  })
+
+  app.get('/api/bootstrap', (_request, response) => {
+    response.json({ token: options.uiToken ?? null, runtime: store.copilotRuntimeStatus() })
   })
 
   app.get(
@@ -271,17 +307,22 @@ export function createGroveApp(store = new GroveStore()) {
   app.post(
     '/api/copilot/messages',
     asyncRoute(async (request, response) => {
-      const body = copilotMessageSchema.parse(request.body) as {
-        vmId: string
-        activeTab: TabId
-        message: string
-      }
+      const body = copilotMessageSchema.parse(request.body)
       response.status(201).json(await store.sendCopilotMessage(body))
     }),
   )
 
+  app.post('/api/copilot/cancel', (request, response) => {
+    const body = copilotCancelSchema.parse(request.body)
+    response.json(store.cancelCopilot(body.scope))
+  })
+
   app.get('/api/copilot/provider', (_request, response) => {
     response.json(store.copilotProviderStatus())
+  })
+
+  app.get('/api/copilot/runtime', (_request, response) => {
+    response.json(store.copilotRuntimeStatus())
   })
 
   app.post('/api/copilot/provider', (request, response) => {
@@ -305,9 +346,17 @@ export function createGroveApp(store = new GroveStore()) {
   })
 
   app.post(
+    '/api/copilot/proposals/:proposalId/decision',
+    asyncRoute(async (request, response) => {
+      const body = copilotDecisionSchema.parse(request.body)
+      response.json(await store.decideProposal(requireParam(request.params.proposalId, 'proposalId'), body.decision))
+    }),
+  )
+
+  app.post(
     '/api/copilot/proposals/:proposalId/confirm',
     asyncRoute(async (request, response) => {
-      response.json(await store.confirmCopilotProposal(requireParam(request.params.proposalId, 'proposalId')))
+      response.json(await store.decideProposal(requireParam(request.params.proposalId, 'proposalId'), 'allow_once'))
     }),
   )
 

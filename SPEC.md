@@ -21,7 +21,7 @@ The app is intentionally local-machine scoped. The frontend is a React/Vite UI; 
 - Backend: Express 5 HTTP API plus `ws` WebSocket endpoints. `server/index.ts` starts the service, `server/app.ts` defines routes and Zod request validation, and `server/store.ts` owns app behavior and event publication.
 - Shared contracts: `src/types.ts` is the source of truth for domain objects, API payloads, and WebSocket event shapes. Any route, event, or UI state change should update these types first.
 - SSH/SFTP layer: `server/sshSessionManager.ts` provides both real and mock adapters. The real adapter uses `ssh2`, caches clients by VM id, retries one channel-open failure after resetting the client, supports SFTP file transfer, and opens interactive PTY shells for terminal tabs.
-- Copilot layer: `server/copilotAgent.ts` builds Moonshot/Kimi messages, exposes approved tools, loops through tool calls up to a fixed budget, and falls back to summarizing tool evidence if the model never returns a final answer.
+- Copilot layer: the brain is **kimi-code CLI** running locally, driven by `server/copilotSupervisor.ts` over a `CopilotDriver` (ACP, print, or mock). kimi reaches VM operations only through Grove's scoped MCP tools (`server/mcp/`), which delegate to `GroveStore`. See `copilot-spec.md` for the full design.
 - Runtime state: project-local state defaults to `.grove/`, can be overridden with `GROVE_STATE_DIR`, and is ignored by Git.
 
 Important local state files:
@@ -71,11 +71,16 @@ Current HTTP routes:
 - `POST /api/local/open-folder`
 - `GET /api/transfers`
 - `POST /api/transfers`
-- `POST /api/copilot/messages`
+- `GET /api/bootstrap` (UI token + copilot runtime status)
+- `POST /api/copilot/messages` (`{ scope, message }`)
+- `POST /api/copilot/cancel` (`{ scope }`)
+- `GET /api/copilot/runtime`
 - `GET /api/copilot/provider`
 - `POST /api/copilot/provider`
 - `POST /api/copilot/proposals`
-- `POST /api/copilot/proposals/:proposalId/confirm`
+- `POST /api/copilot/proposals/:proposalId/decision` (`{ decision }`)
+- `POST /api/copilot/proposals/:proposalId/confirm` (allow-once alias)
+- `GET /api/mcp/tools`, `POST /api/mcp/call` (scope-token-authenticated MCP endpoint kimi uses)
 
 Current WebSocket routes:
 
@@ -95,10 +100,12 @@ When changing a public interface, update all of these together:
 - Do not commit `.grove/`, `*.pem`, `.env*` other than `.env.example`, logs, downloads, build output, or dependency folders.
 - Do not print or document real values from `.grove/.env.local`, private keys, or real inventories. If inspection is needed, summarize structure without exposing secrets.
 - Copilot must not type into or control the user's live terminal. Interactive terminal streams and copilot SSH exec jobs stay separate.
-- Copilot may directly run only read-only inspections through approved command profiles, built-in diagnostics, or SFTP listing. Mutating commands, package operations, file writes, deletes, service restarts, reboots, privilege escalation, and destructive actions must become confirmation proposals first.
-- Free-form copilot chat requires `GROVE_MOONSHOT_API_KEY`. If it is missing, return a setup error instead of inventing a local answer mode.
-- Confirmed copilot proposals execute through backend APIs and produce activity events. Fleet patch proposals target running VMs, execute one SSH command run per VM, and report per-VM results.
+- Copilot may directly run only read-only inspections (`isReadOnlyCommand` in `server/commandProfiles.ts`) through the scoped MCP `run_command`/`read_logs`/`service_status`/`list_files` tools. Mutating commands, package operations, file writes, deletes, service restarts, reboots, privilege escalation, and destructive actions pause for explicit user confirmation before executing.
+- Free-form copilot chat needs a configured Moonshot key (for kimi) or `kimi login`. Without it the kimi driver surfaces an error runtime state instead of inventing a local answer mode.
+- Confirmed copilot actions execute through `GroveStore` under a per-VM mutation lock and produce activity events. Fleet commands freeze their target VM list when proposed, execute one SSH command run per VM, and report per-VM results.
 - The command classifier in `server/commandProfiles.ts` is a safety boundary. Treat changes there as security-sensitive.
+- Mutating HTTP routes require the per-boot UI token (`server/apiToken.ts`); the scoped MCP endpoint requires a per-scope token. Neither token is ever placed in agent-readable context.
+- The generated kimi config (`.grove/runtime/kimi-config.toml`) embeds the Moonshot key; it lives only under gitignored `.grove/runtime/` and must never be committed.
 
 ## AppRunner Rules
 

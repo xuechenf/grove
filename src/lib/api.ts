@@ -4,7 +4,10 @@ import type {
   AppRunnerService,
   AppRunnerServiceInput,
   CommandRun,
+  CopilotPermissionDecision,
   CopilotProviderStatus,
+  CopilotRuntimeStatus,
+  CopilotScope,
   FileNode,
   LocalDefaults,
   ServerEvent,
@@ -19,6 +22,13 @@ export function apiDisabled() {
 }
 
 const apiBase = import.meta.env.VITE_API_BASE_URL ?? ''
+
+let apiToken: string | undefined
+
+/** Store the per-boot UI token; attached to mutating requests so the backend accepts them. */
+export function setApiToken(token: string | undefined) {
+  apiToken = token ?? undefined
+}
 
 export class ApiError extends Error {
   readonly status: number
@@ -54,11 +64,12 @@ function websocketUrl(path: string) {
 
 async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(path), {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(apiToken ? { 'x-grove-token': apiToken } : {}),
       ...options?.headers,
     },
-    ...options,
   })
 
   if (!response.ok) {
@@ -71,6 +82,10 @@ async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>
+}
+
+export function getBootstrap() {
+  return requestJson<{ token: string | null; runtime: CopilotRuntimeStatus }>('/api/bootstrap')
 }
 
 export function getSnapshot() {
@@ -164,11 +179,22 @@ export function createTransfer(input: {
   })
 }
 
-export function sendCopilotMessage(input: { vmId: string; activeTab: TabId; message: string }) {
+export function sendCopilotMessage(input: { scope: CopilotScope; message: string }) {
   return requestJson<{ messages: AppSnapshot['messages']; proposals: ActionProposal[] }>('/api/copilot/messages', {
     method: 'POST',
     body: JSON.stringify(input),
   })
+}
+
+export function cancelCopilot(scope: CopilotScope) {
+  return requestJson<{ scope: CopilotScope }>('/api/copilot/cancel', {
+    method: 'POST',
+    body: JSON.stringify({ scope }),
+  })
+}
+
+export function getCopilotRuntime() {
+  return requestJson<CopilotRuntimeStatus>('/api/copilot/runtime')
 }
 
 export function getCopilotProvider() {
@@ -193,13 +219,11 @@ export function createCopilotProposal(input: {
   })
 }
 
-export function confirmCopilotProposal(proposalId: string) {
-  return requestJson<{ proposal: ActionProposal; commandRun: CommandRun }>(
-    `/api/copilot/proposals/${proposalId}/confirm`,
-    {
-      method: 'POST',
-    },
-  )
+export function decideCopilotProposal(proposalId: string, decision: CopilotPermissionDecision) {
+  return requestJson<{ proposal: ActionProposal }>(`/api/copilot/proposals/${proposalId}/decision`, {
+    method: 'POST',
+    body: JSON.stringify({ decision }),
+  })
 }
 
 export function runTerminalCommand(vmId: string, command: string) {
@@ -209,12 +233,58 @@ export function runTerminalCommand(vmId: string, command: string) {
   })
 }
 
-export function createEventsSocket(onEvent: (event: ServerEvent) => void) {
-  const socket = new WebSocket(websocketUrl('/api/events'))
-  socket.addEventListener('message', (event) => {
-    onEvent(JSON.parse(String(event.data)) as ServerEvent)
-  })
-  return socket
+export interface EventsSocketHandle {
+  close(): void
+}
+
+/**
+ * Events stream with automatic reconnection. The dev backend restarts on every server-file
+ * save (tsx watch), which kills the socket and rotates the per-boot UI token; without
+ * reconnection an open tab silently goes deaf and every mutating call starts failing. On
+ * each (re)connection the server pushes a fresh `snapshot` event, so state resyncs itself;
+ * `onReconnect` lets the caller refresh the bootstrap token as well.
+ */
+export function createEventsSocket(
+  onEvent: (event: ServerEvent) => void,
+  options: { onReconnect?: () => void } = {},
+): EventsSocketHandle {
+  let socket: WebSocket | undefined
+  let closed = false
+  let attempts = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  const connect = () => {
+    socket = new WebSocket(websocketUrl('/api/events'))
+    socket.addEventListener('open', () => {
+      const wasReconnect = attempts > 0
+      attempts = 0
+      if (wasReconnect) {
+        options.onReconnect?.()
+      }
+    })
+    socket.addEventListener('message', (event) => {
+      onEvent(JSON.parse(String(event.data)) as ServerEvent)
+    })
+    socket.addEventListener('close', () => {
+      if (closed) {
+        return
+      }
+      attempts += 1
+      const delay = Math.min(8000, 500 * 2 ** Math.min(attempts - 1, 4)) + Math.floor(Math.random() * 250)
+      timer = setTimeout(connect, delay)
+    })
+  }
+
+  connect()
+  return {
+    close() {
+      closed = true
+      if (timer) {
+        clearTimeout(timer)
+      }
+      socket?.close()
+    },
+  }
 }
 
 export function createTerminalSocket(

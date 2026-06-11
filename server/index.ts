@@ -1,14 +1,19 @@
 import { createServer } from 'node:http'
+import { StringDecoder } from 'node:string_decoder'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { ServerEvent } from '../src/types'
 import { createGroveApp } from './app'
+import { generateUiToken, persistUiToken } from './apiToken'
 import { envValue, loadLocalEnv } from './env'
+import { GroveStore } from './store'
 
 loadLocalEnv()
 
 const port = Number(envValue('GROVE_PORT') ?? 8787)
 const host = envValue('GROVE_HOST') ?? '127.0.0.1'
-const { app, store } = createGroveApp()
+const uiToken = generateUiToken()
+persistUiToken(uiToken)
+const { app, store } = createGroveApp(new GroveStore(), { uiToken })
 const server = createServer(app)
 const eventsWss = new WebSocketServer({ noServer: true })
 const terminalWss = new WebSocketServer({ noServer: true })
@@ -49,24 +54,37 @@ terminalWss.on('connection', async (socket, request) => {
       },
     })
 
+    // Per-stream decoders: PTY chunks can split multi-byte UTF-8 characters, which
+    // per-chunk toString() would render as replacement characters in the terminal.
+    const stdoutDecoder = new StringDecoder('utf8')
+    const stderrDecoder = new StringDecoder('utf8')
+
     stream.on('data', (data: Buffer) => {
+      const text = stdoutDecoder.write(data)
+      if (!text) {
+        return
+      }
       send(socket, {
         type: 'terminal.data',
         payload: {
           sessionId: session.id,
           vmId,
-          data: data.toString('utf8'),
+          data: text,
         },
       })
     })
 
     stream.stderr.on('data', (data: Buffer) => {
+      const text = stderrDecoder.write(data)
+      if (!text) {
+        return
+      }
       send(socket, {
         type: 'terminal.data',
         payload: {
           sessionId: session.id,
           vmId,
-          data: data.toString('utf8'),
+          data: text,
         },
       })
     })

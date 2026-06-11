@@ -10,7 +10,13 @@ import type {
   AuditEvent,
   CommandRun,
   CopilotMessage,
+  CopilotPermissionDecision,
+  CopilotPlanEntryStatus,
+  CopilotPlanState,
   CopilotProgressEvent,
+  CopilotRuntimeStatus,
+  CopilotScope,
+  CopilotToolCall,
   ProcessInfo,
   ServiceInfo,
   ServerEvent,
@@ -20,31 +26,31 @@ import type {
   VmConfig,
   VmConnectionInput,
 } from '../src/types'
+import { scopeVmId, vmScope } from '../src/types'
 import { loadAppRunnerServices, saveAppRunnerServices } from './appRunnerMetadata'
-import { classifyCommand } from './commandProfiles'
+import { classifyCommand, isReadOnlyCommand } from './commandProfiles'
+import { CopilotJournal } from './copilotJournal'
+import { CopilotPolicy } from './copilotPolicy'
+import { CopilotSupervisor } from './copilotSupervisor'
+import type { CopilotDriver, CopilotToolHost, DriverUpdate, ToolResult } from './copilotTypes'
 import {
-  CopilotAgent,
   DEFAULT_MOONSHOT_BASE_URL,
   DEFAULT_MOONSHOT_MODEL,
-  SHADOWSOCKS_INSTALLED_DIAGNOSTIC_COMMAND,
-  SHADOWSOCKS_RUNNING_DIAGNOSTIC_COMMAND,
-  isAgentReadOnlyCommand,
   moonshotConfigFromEnv,
-  toolResultFromCommandRun,
-  toolResultFromFiles,
-  type CopilotAgentInput,
-  type CopilotAgentResult,
-  type CustomSshProposalInput,
   type MoonshotConfig,
-  type SftpTransferPlanInput,
-} from './copilotAgent'
+} from './copilotProvider'
 import { envFlag, envValue, saveMoonshotLocalEnv } from './env'
 import { loadInventory, saveInventory, vmFromConfig } from './inventory'
+import { ScopeTokenRegistry } from './mcp/endpoint'
+import { KeyedMutex } from './mutationLock'
 import type { SshSessionManager } from './sshSessionManager'
 import { MockSshSessionManager, RealSshSessionManager } from './sshSessionManager'
 
-interface CopilotResponder {
-  respond(input: CopilotAgentInput): Promise<CopilotAgentResult>
+const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000
+
+interface PendingPermission {
+  resolve: (decision: CopilotPermissionDecision) => void
+  timer: NodeJS.Timeout
 }
 
 function nowLabel() {
@@ -85,15 +91,6 @@ function uniqueVmId(input: VmConnectionInput, configs: VmConfig[]) {
   return nextId
 }
 
-function normalizedLabels(labels: string[] | undefined, fallback: string[] | undefined) {
-  const cleaned = labels?.map((label) => label.trim()).filter(Boolean)
-  if (cleaned?.length) {
-    return cleaned
-  }
-
-  return fallback?.length ? fallback : ['ssh']
-}
-
 function configFromConnectionInput(input: VmConnectionInput, id: string, existing?: VmConfig): VmConfig {
   const ipAddress = input.ipAddress.trim()
   const port = Number(input.port)
@@ -106,7 +103,8 @@ function configFromConnectionInput(input: VmConnectionInput, id: string, existin
     keyPath: input.pemPath.trim(),
     useAgent: false,
     os: cleanText(input.os) ?? existing?.os ?? 'Linux',
-    labels: normalizedLabels(input.labels, existing?.labels),
+    // Inventory labels are inert metadata (no UI); preserve whatever the YAML had.
+    labels: existing?.labels,
     provider: {
       name: existing?.provider?.name ?? 'SSH',
       region: existing?.provider?.region ?? 'remote',
@@ -211,6 +209,15 @@ function parseRuntimeSections(output: string) {
 
 function refreshVmCommand() {
   return [
+    // CPU% and network Mbps need a rate: two samples one second apart, diffed in awk.
+    `CPU1=$(awk '/^cpu /{print $2+$3+$4+$5+$6+$7+$8" "$5}' /proc/stat 2>/dev/null)`,
+    `NET1=$(awk -F: 'NR>2{name=$1; gsub(/ /,"",name); if(name!="lo"){split($2,f," "); rx+=f[1]; tx+=f[9]}} END{print rx+0" "tx+0}' /proc/net/dev 2>/dev/null)`,
+    'sleep 1',
+    `CPU2=$(awk '/^cpu /{print $2+$3+$4+$5+$6+$7+$8" "$5}' /proc/stat 2>/dev/null)`,
+    `NET2=$(awk -F: 'NR>2{name=$1; gsub(/ /,"",name); if(name!="lo"){split($2,f," "); rx+=f[1]; tx+=f[9]}} END{print rx+0" "tx+0}' /proc/net/dev 2>/dev/null)`,
+    `printf "CPU_PCT=%s\\n" "$(echo "$CPU1 $CPU2" | awk '{dt=$3-$1; di=$4-$2; if(dt>0){printf "%.0f", 100*(dt-di)/dt} else {print 0}}')"`,
+    `printf "NET_RX_MBPS=%s\\n" "$(echo "$NET1 $NET2" | awk '{printf "%.1f", ($3-$1)*8/1000000}')"`,
+    `printf "NET_TX_MBPS=%s\\n" "$(echo "$NET1 $NET2" | awk '{printf "%.1f", ($4-$2)*8/1000000}')"`,
     'printf "HOSTNAME=%s\\n" "$(hostname)"',
     '. /etc/os-release 2>/dev/null; printf "OS=%s\\n" "${PRETTY_NAME:-Linux}"',
     'printf "UPTIME=%s\\n" "$(uptime -p 2>/dev/null || uptime)"',
@@ -234,6 +241,25 @@ function refreshVmCommand() {
     'else',
     '  ps -eo comm=,stat=,pcpu=,rss= --sort=-pcpu 2>/dev/null | head -n 8 | awk \'BEGIN{OFS="\\t"} {state=($2 ~ /Z/ ? "degraded" : "running"); print $1,state,"",$3,$4}\'',
     'fi',
+  ].join('\n')
+}
+
+const unitStatusMarker = '__GROVE_UNIT_STATUS__'
+const unitLogsMarker = '__GROVE_UNIT_LOGS__'
+const unitPortsMarker = '__GROVE_UNIT_PORTS__'
+
+/** Status + recent logs + listening ports for one unit, packed into a single SSH exec. */
+function diagnoseServiceCommand(unit: string, lines: number) {
+  const quoted = shellQuote(unit)
+  return [
+    `printf "${unitStatusMarker}\\n"`,
+    `systemctl status ${quoted} --no-pager -l 2>&1 | head -n 40`,
+    `printf "${unitLogsMarker}\\n"`,
+    `journalctl -u ${quoted} -n ${lines} --no-pager 2>&1`,
+    `printf "${unitPortsMarker}\\n"`,
+    `PID=$(systemctl show ${quoted} -p MainPID --value 2>/dev/null); if [ -n "$PID" ] && [ "$PID" != "0" ]; then ss -ltnp 2>/dev/null | awk -v needle="pid=$PID," 'NR==1 || $0 ~ needle'; fi`,
+    // A stopped or failed unit must not read as a transport failure.
+    'true',
   ].join('\n')
 }
 
@@ -583,24 +609,144 @@ function parseKeyValueOutput(output: string) {
   )
 }
 
-export class GroveStore {
+function scopeLabel(scope: CopilotScope, vms: VM[]) {
+  const vmId = scopeVmId(scope)
+  if (!vmId) {
+    return `All VMs (${vms.length})`
+  }
+  return vms.find((vm) => vm.id === vmId)?.name ?? vmId
+}
+
+function commandKind(command: string): CopilotToolCall['kind'] {
+  return isReadOnlyCommand(command) ? 'read' : 'execute'
+}
+
+function compactLine(value: string, max = 400) {
+  const trimmed = value.replace(/\s+/g, ' ').trim()
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed
+}
+
+/** Clip a multiline block for the timeline, preserving line structure (unlike compactLine). */
+function clipBlock(value: string, maxChars = 8000, maxLines = 200) {
+  const lines = value.replace(/\r\n/g, '\n').trimEnd().split('\n')
+  const clippedLines = lines.length > maxLines ? [...lines.slice(0, maxLines), `… +${lines.length - maxLines} lines`] : lines
+  const joined = clippedLines.join('\n')
+  return joined.length > maxChars ? `${joined.slice(0, maxChars - 1)}…` : joined
+}
+
+/**
+ * Tools the Grove backend executes and instruments itself (startToolCall/finishToolCall with
+ * the real command and output). The agent also reports these calls from its side; that view
+ * is dropped so each step appears exactly once, with the authoritative card winning.
+ */
+const GROVE_INSTRUMENTED_TOOLS = new Set([
+  'run_command',
+  'read_logs',
+  'service_status',
+  'list_files',
+  'fleet_run_command',
+  'inspect_vm',
+  'diagnose_service',
+])
+
+/** Normalize an agent-reported tool title ("mcp__grove__run_command", "grove:run_command") to its base name. */
+function agentToolName(title: string): string {
+  const normalized = title.toLowerCase().trim().replace(/\s+/g, '_')
+  const segments = normalized.split(/__|[:./]/).filter(Boolean)
+  return segments[segments.length - 1] ?? normalized
+}
+
+function toPlanEntryStatus(value: string): CopilotPlanEntryStatus {
+  if (value === 'completed' || value === 'done') {
+    return 'completed'
+  }
+  if (value === 'in_progress' || value === 'active' || value === 'running') {
+    return 'in_progress'
+  }
+  return 'pending'
+}
+
+/** Mutable per-prompt state threaded through driver updates for one copilot turn. */
+interface CopilotTurn {
+  scope: CopilotScope
+  assistantId: string
+  text: string
+  /**
+   * When the first answer token arrived. The assistant message is re-anchored to this
+   * moment so the timeline reads like the agent's run: steps first, then the answer.
+   */
+  textStartedAt?: number
+  /** Open streaming thought block, closed when any non-thought update arrives. */
+  thought?: CopilotToolCall
+  /** This turn's plan checklist id, allocated on the first plan update. */
+  planId?: string
+}
+
+function commandOutput(run: CommandRun) {
+  return run.stdout?.trim() || run.stderr?.trim() || run.summary
+}
+
+function toolResultFromRun(run: CommandRun, reason: string): ToolResult {
+  return {
+    ok: run.status === 'completed',
+    summary: `${reason}: ${run.summary}`.trim(),
+    data: {
+      status: run.status,
+      exitCode: run.exitCode,
+      stdout: (run.stdout ?? '').slice(0, 6000),
+      stderr: (run.stderr ?? '').slice(0, 2000),
+    },
+    error: run.status === 'failed' ? run.stderr || run.summary : undefined,
+  }
+}
+
+export interface GroveStoreOptions {
+  supervisor?: CopilotSupervisor
+  driver?: CopilotDriver
+  journal?: CopilotJournal
+  policy?: CopilotPolicy
+  tokens?: ScopeTokenRegistry
+}
+
+export class GroveStore implements CopilotToolHost {
   private readonly events = new EventEmitter()
   private readonly ssh: SshSessionManager
-  private copilot: CopilotResponder
+  private readonly journal: CopilotJournal
+  private readonly policy: CopilotPolicy
+  readonly scopeTokens: ScopeTokenRegistry
+  private readonly supervisor: CopilotSupervisor
+  private readonly mutationLock = new KeyedMutex()
+  /**
+   * One confirmation card at a time per scope. When the agent issues several gated
+   * commands in parallel, their cards surface strictly in arrival order and the next one
+   * only appears once the previous is decided — the user can never confirm out of order.
+   */
+  private readonly confirmationLock = new KeyedMutex()
+  /** Strictly increasing timeline-order counter; see {@link nextStamp}. */
+  private lastStamp = 0
+  private readonly pendingPermissions = new Map<string, PendingPermission>()
   private vmConfigs: VmConfig[]
   private vms: VM[]
   private transfers: TransferJob[]
   private messages: CopilotMessage[]
   private proposals: ActionProposal[]
+  private toolCalls: CopilotToolCall[]
+  private plans: CopilotPlanState[]
   private refreshedOnce = false
 
   constructor(
     ssh: SshSessionManager = envFlag('GROVE_USE_FIXTURES') ? new MockSshSessionManager() : new RealSshSessionManager(),
-    copilot: CopilotResponder = new CopilotAgent(),
+    options: GroveStoreOptions = {},
   ) {
     const useFixtures = envFlag('GROVE_USE_FIXTURES')
     this.ssh = ssh
-    this.copilot = copilot
+    // In fixtures/test mode the journal is disabled so tests never touch the real .grove.
+    this.journal = options.journal ?? new CopilotJournal(undefined, !useFixtures)
+    this.policy = options.policy ?? new CopilotPolicy({ persist: !useFixtures })
+    this.scopeTokens = options.tokens ?? new ScopeTokenRegistry()
+    this.supervisor =
+      options.supervisor ??
+      new CopilotSupervisor({ host: this, tokens: this.scopeTokens, driver: options.driver })
     const configs = loadInventory()
     this.vmConfigs = configs
     this.vms = this.vmConfigs.map((config) => vmFromConfig(config, fixtureVms.find((vm) => vm.id === config.id)))
@@ -617,8 +763,30 @@ export class GroveStore {
       }))
     }
     this.transfers = useFixtures ? [...initialTransfers] : []
-    this.messages = [...initialMessages]
-    this.proposals = useFixtures ? [...initialProposals] : []
+    if (useFixtures) {
+      this.messages = [...initialMessages]
+      this.proposals = [...initialProposals]
+      this.toolCalls = []
+      this.plans = []
+    } else {
+      const hydrated = this.journal.load()
+      this.messages = hydrated.messages
+      this.proposals = hydrated.proposals
+      this.toolCalls = hydrated.toolCalls
+      this.plans = hydrated.plans
+    }
+    void this.supervisor.start()
+  }
+
+  /**
+   * Allocate a strictly increasing `createdAt` for timeline items. `Date.now()` has only
+   * millisecond resolution, so steps started in the same tick would share an order value and
+   * the UI would fall back to insertion order across kinds. A monotonic counter guarantees
+   * unique, temporally-correct ordering for messages, tool calls, thoughts, and plans.
+   */
+  private nextStamp() {
+    this.lastStamp = Math.max(Date.now(), this.lastStamp + 1)
+    return this.lastStamp
   }
 
   copilotProviderStatus() {
@@ -630,9 +798,12 @@ export class GroveStore {
     }
   }
 
+  copilotRuntimeStatus(): CopilotRuntimeStatus {
+    return this.supervisor.status()
+  }
+
   configureCopilotProvider(input: MoonshotConfig) {
     saveMoonshotLocalEnv(input)
-    this.copilot = new CopilotAgent(input)
     return this.copilotProviderStatus()
   }
 
@@ -647,6 +818,9 @@ export class GroveStore {
       transfers: this.transfers,
       messages: this.messages,
       proposals: this.proposals,
+      toolCalls: this.toolCalls,
+      plans: this.plans,
+      runtime: this.supervisor.status(),
     }
   }
 
@@ -888,6 +1062,7 @@ export class GroveStore {
         ...vm,
         health: 'critical',
         lifecycle: vm.lifecycle === 'stopped' ? 'running' : vm.lifecycle,
+        alerts: ['VM is unreachable over SSH'],
         connection: {
           ...vm.connection,
           testStatus: 'failed',
@@ -913,12 +1088,35 @@ export class GroveStore {
       parsedLoadAverage[2] ?? 0,
     ]
 
+    // Sampled rates; absent keys (non-Linux host, mock without them) keep the prior value.
+    const sampledNumber = (raw: string | undefined, fallback: number) => {
+      const parsed = Number(raw)
+      return raw !== undefined && Number.isFinite(parsed) ? Math.max(0, parsed) : fallback
+    }
+    const cpuPercent = Math.round(sampledNumber(values.CPU_PCT, vm.metrics.cpuPercent))
+    const memoryPercent = Math.round((memoryUsedMb / memoryTotalMb) * 100)
+
+    // Live problem list derived from this sample; replaces any previous alerts wholesale.
+    const alerts: string[] = []
+    if (diskPercent >= vm.metrics.thresholds.diskWarning) {
+      alerts.push(`Disk usage at ${diskPercent}% (warning threshold ${vm.metrics.thresholds.diskWarning}%)`)
+    }
+    if (memoryPercent >= vm.metrics.thresholds.memoryWarning) {
+      alerts.push(`Memory usage at ${memoryPercent}% (warning threshold ${vm.metrics.thresholds.memoryWarning}%)`)
+    }
+    for (const service of services) {
+      if (service.state !== 'running') {
+        alerts.push(`Service ${service.name} is ${service.state}`)
+      }
+    }
+
     const updatedVm: VM = {
       ...vm,
       hostname: values.HOSTNAME || vm.hostname,
       os: values.OS || vm.os,
-      health: diskPercent >= vm.metrics.thresholds.diskWarning ? 'warning' : 'healthy',
+      health: alerts.length ? 'warning' : 'healthy',
       lifecycle: 'running',
+      alerts: alerts.length ? alerts : ['No active alerts'],
       resources: {
         cpuCores: Number(values.CPUS) || vm.resources.cpuCores,
         memoryGb: Math.max(1, Math.round(memoryTotalMb / 1024)),
@@ -926,8 +1124,10 @@ export class GroveStore {
       },
       metrics: {
         ...vm.metrics,
-        cpuPercent: 0,
-        memoryPercent: Math.round((memoryUsedMb / memoryTotalMb) * 100),
+        cpuPercent,
+        memoryPercent,
+        networkInMbps: sampledNumber(values.NET_RX_MBPS, vm.metrics.networkInMbps),
+        networkOutMbps: sampledNumber(values.NET_TX_MBPS, vm.metrics.networkOutMbps),
         diskPercent,
         loadAverage,
         uptime: values.UPTIME || vm.metrics.uptime,
@@ -1034,234 +1234,768 @@ export class GroveStore {
     return transfer
   }
 
-  async sendCopilotMessage(input: { vmId: string; activeTab: TabId; message: string }) {
-    const vm = this.requireVm(input.vmId)
+  /**
+   * Drive one copilot turn for a scope. The supervisor (kimi-code CLI) streams updates; we
+   * translate them into events + journal entries. Mutating work the agent attempts arrives
+   * back through the MCP tool host methods below, which gate and execute it.
+   */
+  async sendCopilotMessage(input: { scope: CopilotScope; message: string }) {
+    const scope = input.scope
+    const vmId = scopeVmId(scope)
+    if (vmId) {
+      // Warm the SSH connection while kimi boots and thinks, so the agent's first
+      // command doesn't pay the TCP+handshake cost serially.
+      void this.ssh.warmConnection?.(this.requireVm(vmId))
+    }
+
     const userMessage: CopilotMessage = {
       id: id('msg-user'),
       role: 'user',
       content: input.message,
       timestamp: nowLabel(),
-      contextVmId: input.vmId,
-      contextTab: input.activeTab,
+      scope,
+      createdAt: this.nextStamp(),
+      contextVmId: vmId,
     }
-    this.messages = [...this.messages, userMessage]
-    this.publish({ type: 'copilot.message', payload: userMessage })
-    this.publishCopilotProgress(input.vmId, {
-      title: 'Queued copilot request',
-      detail: `${vm.name} / ${input.activeTab}`,
-      status: 'running',
-    })
-    const proposals: ActionProposal[] = []
-    const commandRuns: CommandRun[] = []
-    const history = this.messages.filter((message) => !message.contextVmId || message.contextVmId === input.vmId)
-    let agentResult
-    try {
-      agentResult = await this.copilot.respond({
-        vm,
-        vms: this.vms,
-        activeTab: input.activeTab,
-        message: input.message,
-        transfers: this.transfers,
-        history,
-        onProgress: (progress) => this.publishCopilotProgress(input.vmId, progress),
-        runtime: {
-          inspectSystem: async (check) => {
-            const command =
-              check === 'shadowsocks_installed'
-                ? SHADOWSOCKS_INSTALLED_DIAGNOSTIC_COMMAND
-                : SHADOWSOCKS_RUNNING_DIAGNOSTIC_COMMAND
-            const run = await this.ssh.executeCommand({
-              vm,
-              command,
-              actor: 'copilot',
-              mutating: false,
-            })
-            commandRuns.push(run)
-            return toolResultFromCommandRun(run)
-          },
-          executeReadOnlySsh: async (command, reason) => {
-            if (!isAgentReadOnlyCommand(command)) {
-              return {
-                ok: false,
-                summary: 'Command requires a confirmation proposal before it can run.',
-                error: `Rejected non-read-only copilot command: ${command}`,
-              }
-            }
+    this.appendMessage(userMessage)
+    this.publishCopilotProgress(scope, { title: 'Queued copilot request', detail: scopeLabel(scope, this.vms), status: 'running' })
 
-            const run = await this.ssh.executeCommand({
-              vm,
-              command,
-              actor: 'copilot',
-              mutating: false,
-            })
-            commandRuns.push(run)
-            const result = toolResultFromCommandRun(run)
-            return {
-              ...result,
-              summary: `${reason} ${result.summary}`.trim(),
-            }
-          },
-          listRemoteFiles: async (path) => {
-            const files = await this.ssh.listFiles(vm, path)
-            return toolResultFromFiles(path, files)
-          },
-          createKnownProposal: (type) => {
-            const proposal = proposalFor(type, vm, input.activeTab, this.vms)
-            proposals.push(proposal)
-            return {
-              ok: true,
-              summary: `Created proposal "${proposal.title}".`,
-              data: proposal,
-            }
-          },
-          createSshProposal: (proposalInput: CustomSshProposalInput) => {
-            const proposal = this.customCommandProposal(vm, proposalInput)
-            proposals.push(proposal)
-            return {
-              ok: true,
-              summary: `Created proposal "${proposal.title}".`,
-              data: proposal,
-            }
-          },
-          planSftpTransfer: (transferPlan: SftpTransferPlanInput) => {
-            const proposal = this.sftpTransferProposal(vm, transferPlan)
-            proposals.push(proposal)
-            return {
-              ok: true,
-              summary: `Created SFTP proposal "${proposal.title}".`,
-              data: proposal,
-            }
-          },
-        },
-      })
-    } catch (error) {
-      this.publishCopilotProgress(input.vmId, {
-        title: 'Copilot request failed',
-        detail: error instanceof Error ? error.message : 'Unknown copilot error',
-        status: 'failed',
-      })
-      throw error
-    }
-    const assistantMessage: CopilotMessage = {
-      id: id('msg-assistant'),
+    const assistantId = id('msg-assistant')
+    const assistant: CopilotMessage = {
+      id: assistantId,
       role: 'assistant',
-      content: agentResult.content,
+      content: '',
       timestamp: nowLabel(),
-      contextVmId: input.vmId,
-      contextTab: input.activeTab,
+      scope,
+      createdAt: this.nextStamp(),
+      streaming: true,
+      contextVmId: vmId,
     }
-    this.messages = [...this.messages, assistantMessage]
-    if (proposals.length) {
-      this.proposals = [...proposals, ...this.proposals]
-    }
-    this.publish({ type: 'copilot.message', payload: assistantMessage })
-    for (const proposal of proposals) {
-      this.publish({ type: 'copilot.proposal.updated', payload: proposal })
-    }
-    for (const run of commandRuns) {
-      this.addActivity(
-        run.vmId,
-        makeActivity('Copilot SSH inspection', run.summary, run.status === 'failed' ? 'critical' : 'info'),
-        'copilot',
-        { commandRunId: run.id },
+    this.messages = [...this.messages, assistant]
+    this.publish({ type: 'copilot.message', payload: assistant })
+
+    const turn: CopilotTurn = { scope, assistantId, text: '' }
+    try {
+      const result = await this.supervisor.prompt(scope, input.message, (update) =>
+        this.applyDriverUpdate(turn, update),
       )
+      turn.text = result.text?.trim() ? result.text : turn.text
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Copilot run failed.'
+      turn.text = turn.text || `Copilot error: ${detail}`
+      this.publishCopilotProgress(scope, { title: 'Copilot request failed', detail, status: 'failed' })
     }
-    this.publishCopilotProgress(input.vmId, {
-      title: 'Copilot response ready',
-      detail: proposals.length ? `${proposals.length} proposal${proposals.length === 1 ? '' : 's'} prepared` : undefined,
-      status: 'completed',
-    })
-    return { messages: [userMessage, assistantMessage], proposals }
+    this.closeThought(turn)
+
+    const finalAssistant: CopilotMessage = {
+      ...assistant,
+      content: turn.text || 'No response produced.',
+      createdAt: turn.textStartedAt ?? this.nextStamp(),
+      streaming: false,
+      timestamp: nowLabel(),
+    }
+    this.messages = this.messages.map((message) => (message.id === assistantId ? finalAssistant : message))
+    this.journal.recordMessage(scope, finalAssistant)
+    this.publish({ type: 'copilot.message', payload: finalAssistant })
+    this.publishCopilotProgress(scope, { title: 'Copilot response ready', status: 'completed' })
+
+    return { messages: [userMessage, finalAssistant], proposals: this.proposals.filter((proposal) => proposal.scope === scope) }
+  }
+
+  cancelCopilot(scope: CopilotScope) {
+    this.supervisor.cancel(scope)
+    // Release tool calls paused on confirmation: the agent is going away, and a stuck
+    // awaiting card would hold the scope's confirmation queue until its timeout.
+    for (const [proposalId, pending] of [...this.pendingPermissions]) {
+      const proposal = this.proposals.find((item) => item.id === proposalId)
+      if (!proposal || (proposal.scope ?? vmScope(proposal.vmId)) !== scope) {
+        continue
+      }
+      clearTimeout(pending.timer)
+      this.pendingPermissions.delete(proposalId)
+      this.updateProposal({ ...proposal, status: 'dismissed', result: 'Cancelled.' })
+      pending.resolve('deny')
+    }
+    this.publishCopilotProgress(scope, { title: 'Cancellation requested', status: 'failed' })
+    return { scope }
   }
 
   createCopilotProposal(input: { vmId: string; activeTab: TabId; actionType: ActionProposal['actionType'] }) {
     const vm = this.requireVm(input.vmId)
     const proposal = proposalFor(input.actionType, vm, input.activeTab, this.vms)
-    this.proposals = [proposal, ...this.proposals]
-    this.publish({ type: 'copilot.proposal.updated', payload: proposal })
+    this.addProposal(proposal)
     return proposal
   }
 
-  async confirmCopilotProposal(proposalId: string) {
+  /**
+   * Resolve a proposal. For MCP-gated proposals (a mutating command the agent paused on)
+   * this releases the awaiting tool call. For suggestion-button proposals it executes the
+   * command directly. `always_allow` records a narrow policy rule.
+   */
+  async decideProposal(proposalId: string, decision: CopilotPermissionDecision) {
     const proposal = this.proposals.find((item) => item.id === proposalId)
     if (!proposal) {
       throw new Error('Proposal not found')
     }
 
-    const vm = this.requireVm(proposal.vmId)
-    if (proposal.actionType === 'patch_vms') {
-      const commandRuns: CommandRun[] = []
-      const targets = runningVms(this.vms)
-
-      for (const targetVm of targets) {
-        const run = await this.ssh.executeCommand({
-          vm: targetVm,
-          command: proposal.command,
-          actor: 'copilot',
-          mutating: true,
-        })
-        commandRuns.push(run)
-        this.addActivity(
-          targetVm.id,
-          makeActivity(
-            `Fleet patch ${run.status}`,
-            run.summary,
-            run.status === 'failed' ? 'critical' : 'success',
-          ),
-          'copilot',
-          {
-            commandRunId: run.id,
-            proposalId: proposal.id,
-          },
-        )
-      }
-
-      const completed = commandRuns.filter((run) => run.status === 'completed').length
-      const result = commandRuns.length
-        ? [
-            `Fleet patch attempted on ${commandRuns.length} VM${commandRuns.length === 1 ? '' : 's'}; ${completed} succeeded.`,
-            ...commandRuns.map((run) => {
-              const targetVm = this.getVm(run.vmId)
-              return `${targetVm?.name ?? run.vmId}: ${run.status} - ${run.summary}`
-            }),
-          ].join('\n')
-        : 'No running VMs were available for patching.'
-      const updatedProposal: ActionProposal = {
-        ...proposal,
-        status: commandRuns.length ? 'executed' : 'dismissed',
-        result,
-      }
-
-      this.proposals = this.proposals.map((item) => (item.id === proposalId ? updatedProposal : item))
-      this.publish({ type: 'copilot.proposal.updated', payload: updatedProposal })
-
-      return { proposal: updatedProposal, commandRun: commandRuns[0], commandRuns }
+    const pending = this.pendingPermissions.get(proposalId)
+    if (pending) {
+      clearTimeout(pending.timer)
+      this.pendingPermissions.delete(proposalId)
+      this.updateProposal({ ...proposal, decision, status: decision === 'deny' ? 'dismissed' : proposal.status })
+      pending.resolve(decision)
+      return { proposal: this.proposals.find((item) => item.id === proposalId) ?? proposal }
     }
 
-    const classification = classifyCommand(proposal.command)
-    const run = await this.ssh.executeCommand({
+    // Legacy suggestion-button proposal: execute (or dismiss) immediately.
+    if (decision === 'deny') {
+      const dismissed: ActionProposal = { ...proposal, status: 'dismissed', decision, result: 'Dismissed by user.' }
+      this.updateProposal(dismissed)
+      return { proposal: dismissed }
+    }
+    if (decision === 'always_allow') {
+      this.policy.remember(proposal.scope ?? vmScope(proposal.vmId), proposal.command)
+    }
+    // Record and broadcast the decision before executing: the SSH run can take a while and
+    // every client should see the card switch to its executing state immediately.
+    const decided: ActionProposal = { ...proposal, decision }
+    this.updateProposal(decided)
+    return this.runLegacyProposal(decided)
+  }
+
+  // -- CopilotToolHost: backend capabilities exposed to the agent through scoped MCP tools.
+
+  async runScopedCommand(input: { scope: CopilotScope; vmId: string; command: string; reason: string }): Promise<ToolResult> {
+    const vm = this.getVm(input.vmId)
+    if (!vm) {
+      return { ok: false, summary: 'VM not found.', error: `Unknown VM ${input.vmId}.` }
+    }
+
+    const toolCall = this.startToolCall(input.scope, 'run_command', commandKind(input.command), vm.id, input.command)
+
+    if (isReadOnlyCommand(input.command)) {
+      const run = await this.ssh.executeCommand({ vm, command: input.command, actor: 'copilot', mutating: false })
+      this.recordCommandActivity(vm.id, 'Copilot inspection', run)
+      this.finishToolCall(toolCall, run.status === 'completed' ? 'completed' : 'failed', commandOutput(run))
+      return toolResultFromRun(run, input.reason)
+    }
+
+    if (this.policy.allows(input.scope, input.command)) {
+      return this.executeGatedCommand({ scope: input.scope, vm, command: input.command, reason: input.reason, toolCall })
+    }
+
+    const confirmation = await this.requestConfirmation(input.scope, input.command, () =>
+      this.permissionProposal(input.scope, vm, input.command, input.reason, toolCall.id),
+    )
+
+    if (confirmation.decision === 'deny') {
+      this.finishToolCall(toolCall, 'failed', 'User declined the command.')
+      return { ok: false, summary: 'User declined this command.', error: 'declined' }
+    }
+    return this.executeGatedCommand({
+      scope: input.scope,
       vm,
-      command: proposal.command,
-      actor: 'copilot',
-      mutating: classification.mutating,
+      command: input.command,
+      reason: input.reason,
+      toolCall,
+      proposalId: confirmation.proposalId,
     })
-    const updatedProposal: ActionProposal = {
+  }
+
+  /**
+   * Surface a confirmation card and block until the user decides, holding the per-scope
+   * confirmation slot. Queued callers re-check policy once they reach the head: an earlier
+   * card may have granted always-allow for the same command, in which case no card is shown.
+   */
+  private async requestConfirmation(
+    scope: CopilotScope,
+    command: string,
+    makeProposal: () => ActionProposal,
+  ): Promise<{ decision: CopilotPermissionDecision; proposalId?: string }> {
+    return this.confirmationLock.run(
+      scope,
+      async () => {
+        if (this.policy.allows(scope, command)) {
+          return { decision: 'allow_once' }
+        }
+        const proposal = makeProposal()
+        this.addProposal(proposal)
+        this.publishCopilotProgress(scope, { title: 'Awaiting confirmation', detail: command, status: 'running' })
+        const decision = await this.awaitDecision(proposal.id)
+        if (decision === 'deny') {
+          // Cancellation and timeout record their own outcome before resolving deny.
+          const current = this.currentProposal(proposal)
+          if (!current.result) {
+            this.updateProposal({ ...current, status: 'dismissed', result: 'Declined by user.' })
+          }
+        } else if (decision === 'always_allow') {
+          // Remember inside the slot so the next queued identical command skips its card.
+          this.policy.remember(scope, command)
+        }
+        return { decision, proposalId: proposal.id }
+      },
+      () => this.publishCopilotProgress(scope, { title: 'Queued for confirmation', detail: command, status: 'running' }),
+    )
+  }
+
+  async readRemoteLogs(input: { vmId: string; unit?: string; grep?: string; lines: number }): Promise<ToolResult> {
+    const lines = Math.min(Math.max(input.lines, 1), 1000)
+    const base = input.unit
+      ? `journalctl -u ${shellQuote(input.unit)} -n ${lines} --no-pager`
+      : `journalctl -n ${lines} --no-pager`
+    const command = input.grep ? `${base} | grep -i ${shellQuote(input.grep)}` : base
+    return this.runScopedCommand({ scope: vmScope(input.vmId), vmId: input.vmId, command, reason: 'Read logs' })
+  }
+
+  async serviceStatus(input: { vmId: string; name: string }): Promise<ToolResult> {
+    const command = `systemctl status ${shellQuote(input.name)} --no-pager`
+    return this.runScopedCommand({ scope: vmScope(input.vmId), vmId: input.vmId, command, reason: 'Service status' })
+  }
+
+  async listRemoteFiles(input: { vmId: string; path: string }): Promise<ToolResult> {
+    const vm = this.getVm(input.vmId)
+    if (!vm) {
+      return { ok: false, summary: 'VM not found.', error: `Unknown VM ${input.vmId}.` }
+    }
+    const toolCall = this.startToolCall(vmScope(vm.id), 'list_files', 'read', vm.id, input.path)
+    try {
+      const files = await this.ssh.listFiles(vm, input.path)
+      this.finishToolCall(toolCall, 'completed', `${files.length} items`)
+      return {
+        ok: true,
+        summary: `Listed ${files.length} item${files.length === 1 ? '' : 's'} at ${input.path}.`,
+        data: files.slice(0, 80).map((file) => ({ name: file.name, type: file.type, size: file.size })),
+      }
+    } catch (error) {
+      this.finishToolCall(toolCall, 'failed', error instanceof Error ? error.message : 'SFTP failed.')
+      return { ok: false, summary: 'SFTP listing failed.', error: error instanceof Error ? error.message : 'SFTP failed.' }
+    }
+  }
+
+  /**
+   * Composite inspection for the agent: one SSH exec refreshes metrics, services, and top
+   * processes (reusing the UI refresh path, so the VM card updates as a side effect).
+   */
+  async inspectVm(input: { scope: CopilotScope; vmId: string }): Promise<ToolResult> {
+    const existing = this.getVm(input.vmId)
+    if (!existing) {
+      return { ok: false, summary: 'VM not found.', error: `Unknown VM ${input.vmId}.` }
+    }
+
+    const toolCall = this.startToolCall(input.scope, 'inspect_vm', 'read', existing.id, 'Live metrics, services, and processes (one SSH round-trip)')
+    const vm = await this.refreshVmInfo(existing.id)
+    if (vm.connection.testStatus === 'failed') {
+      this.finishToolCall(toolCall, 'failed', 'SSH inspection failed; the VM is unreachable.')
+      return { ok: false, summary: `${vm.name} is unreachable over SSH.`, error: 'SSH inspection failed.' }
+    }
+
+    const degraded = vm.services.filter((service) => service.state !== 'running').length
+    const summary = `${vm.name}: load ${vm.metrics.loadAverage[0]}, mem ${vm.metrics.memoryPercent}%, disk ${vm.metrics.diskPercent}%, ${vm.services.length} services (${degraded} not running).`
+    this.finishToolCall(toolCall, 'completed', summary)
+    return {
+      ok: true,
+      summary,
+      data: {
+        hostname: vm.hostname,
+        os: vm.os,
+        lifecycle: vm.lifecycle,
+        health: vm.health,
+        metrics: vm.metrics,
+        services: vm.services,
+        processes: vm.processes.slice(0, 8),
+        alerts: vm.alerts,
+      },
+    }
+  }
+
+  /** Composite unit diagnosis: systemctl status + recent journal + listening ports, one exec. */
+  async diagnoseService(input: { scope: CopilotScope; vmId: string; unit: string; lines: number }): Promise<ToolResult> {
+    const vm = this.getVm(input.vmId)
+    if (!vm) {
+      return { ok: false, summary: 'VM not found.', error: `Unknown VM ${input.vmId}.` }
+    }
+    const unit = input.unit.trim()
+    if (!unit) {
+      return { ok: false, summary: 'A unit name is required.', error: 'Missing unit.' }
+    }
+
+    const lines = Math.min(Math.max(input.lines, 1), 400)
+    const toolCall = this.startToolCall(input.scope, 'diagnose_service', 'read', vm.id, `Status, ${lines} log lines, and ports for ${unit}`)
+    const run = await this.ssh.executeCommand({ vm, command: diagnoseServiceCommand(unit, lines), actor: 'copilot', mutating: false })
+    if (run.status === 'failed') {
+      this.recordCommandActivity(vm.id, 'Copilot inspection', run)
+      this.finishToolCall(toolCall, 'failed', commandOutput(run))
+      return { ok: false, summary: `Could not diagnose ${unit}: ${run.summary}`, error: run.stderr || run.summary }
+    }
+
+    const [, afterStatus = ''] = (run.stdout ?? '').split(unitStatusMarker)
+    const [statusText = '', afterLogs = ''] = afterStatus.split(unitLogsMarker)
+    const [logsText = '', portsText = ''] = afterLogs.split(unitPortsMarker)
+    const status = statusText.trim()
+    const statusLine = status.split('\n')[0] ?? ''
+    const logLines = logsText.trim() ? logsText.trim().split('\n').length : 0
+    const ports = portsText.trim()
+
+    const summary = `${unit}: ${compactLine(statusLine, 160) || 'no status output'}; ${logLines} log line${logLines === 1 ? '' : 's'}${ports ? '; listening sockets found' : ''}.`
+    this.recordCommandActivity(vm.id, 'Copilot inspection', run)
+    this.finishToolCall(toolCall, 'completed', summary)
+    return {
+      ok: true,
+      summary,
+      data: {
+        status: clipBlock(status, 4000, 60),
+        logs: clipBlock(logsText.trim(), 5000, 120),
+        ports: clipBlock(ports, 1500, 30),
+      },
+    }
+  }
+
+  /**
+   * Run one command on many VMs with bounded parallelism (default 4, GROVE_FLEET_CONCURRENCY
+   * to override). Per-VM mutation locks still serialize writes on each machine; results come
+   * back in target order regardless of completion order.
+   */
+  private async fanOutCommand(input: {
+    targets: VM[]
+    command: string
+    scope?: CopilotScope
+    proposalId?: string
+    activityLabel: string
+  }): Promise<CommandRun[]> {
+    const { targets, command, scope, proposalId, activityLabel } = input
+    const concurrency = Math.max(1, Number(envValue('GROVE_FLEET_CONCURRENCY')) || 4)
+    const runs: CommandRun[] = new Array(targets.length)
+    let nextIndex = 0
+
+    const worker = async () => {
+      while (nextIndex < targets.length) {
+        const index = nextIndex
+        nextIndex += 1
+        const target = targets[index]
+        try {
+          runs[index] = await this.mutationLock.run(
+            target.id,
+            () => this.ssh.executeCommand({ vm: target, command, actor: 'copilot', mutating: true }),
+            scope
+              ? () => this.publishCopilotProgress(scope, { title: `Queued behind work on ${target.name}`, status: 'running' })
+              : undefined,
+          )
+        } catch (error) {
+          // executeCommand resolves failed runs rather than rejecting; this is a backstop.
+          const message = error instanceof Error ? error.message : 'Command failed.'
+          const timestamp = new Date().toISOString()
+          runs[index] = {
+            id: id('cmd'),
+            vmId: target.id,
+            actor: 'copilot',
+            command,
+            status: 'failed',
+            startedAt: timestamp,
+            completedAt: timestamp,
+            stderr: message,
+            summary: message,
+            mutating: true,
+          }
+        }
+        this.recordCommandActivity(target.id, `${activityLabel} ${runs[index].status}`, runs[index], proposalId)
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()))
+    return runs
+  }
+
+  async fleetRunCommand(input: { scope: CopilotScope; command: string; reason: string; targetVmIds?: string[] }): Promise<ToolResult> {
+    const targets = (input.targetVmIds?.length
+      ? input.targetVmIds.map((vmId) => this.getVm(vmId)).filter((vm): vm is VM => Boolean(vm))
+      : runningVms(this.vms))
+    if (!targets.length) {
+      return { ok: false, summary: 'No target VMs available.', error: 'No running VMs.' }
+    }
+
+    const toolCall = this.startToolCall(input.scope, 'fleet_run_command', commandKind(input.command), undefined, input.command)
+    const confirmation = await this.requestConfirmation(input.scope, input.command, () =>
+      this.fleetPermissionProposal(input.scope, targets, input.command, input.reason, toolCall.id),
+    )
+
+    if (confirmation.decision === 'deny') {
+      this.finishToolCall(toolCall, 'failed', 'User declined the fleet command.')
+      return { ok: false, summary: 'User declined this fleet command.', error: 'declined' }
+    }
+
+    const runs = await this.fanOutCommand({
+      targets,
+      command: input.command,
+      scope: input.scope,
+      proposalId: confirmation.proposalId,
+      activityLabel: 'Fleet command',
+    })
+    const completed = runs.filter((run) => run.status === 'completed').length
+    const results = runs.map((run, index) => `${targets[index].name}: ${run.status} - ${run.summary}`)
+
+    const summary = `Fleet command ran on ${targets.length} VM${targets.length === 1 ? '' : 's'}; ${completed} succeeded.`
+    const proposal = confirmation.proposalId
+      ? this.proposals.find((item) => item.id === confirmation.proposalId)
+      : undefined
+    if (proposal) {
+      this.updateProposal({ ...proposal, status: 'executed', result: [summary, ...results].join('\n') })
+    }
+    this.finishToolCall(toolCall, completed ? 'completed' : 'failed', summary)
+    return { ok: completed > 0, summary, data: results }
+  }
+
+  recordNote(input: { scope: CopilotScope; content: string }): ToolResult {
+    this.supervisor.appendNote(input.scope, input.content)
+    return { ok: true, summary: 'Saved a durable note for this scope.' }
+  }
+
+  getHistory(input: { scope: CopilotScope; query?: string; limit?: number }): ToolResult {
+    const entries = this.journal.history(input.scope, { query: input.query, limit: input.limit })
+    return { ok: true, summary: `Found ${entries.length} history entr${entries.length === 1 ? 'y' : 'ies'}.`, data: entries }
+  }
+
+  /**
+   * Translate one streamed driver update into timeline state + events. Everything the agent
+   * does is surfaced as a first-class timeline item — thought blocks, its own tool
+   * executions, and plan checklists — not flattened into transient progress blips.
+   */
+  private applyDriverUpdate(turn: CopilotTurn, update: DriverUpdate) {
+    const scope = turn.scope
+    if (update.type === 'message_delta') {
+      this.closeThought(turn)
+      turn.text += update.text
+      if (!turn.textStartedAt) {
+        // First token: re-anchor the message and re-publish it whole. No deltas have been
+        // sent yet, so the client cannot double-append this chunk.
+        turn.textStartedAt = this.nextStamp()
+        this.messages = this.messages.map((message) =>
+          message.id === turn.assistantId ? { ...message, content: turn.text, createdAt: turn.textStartedAt } : message,
+        )
+        const anchored = this.messages.find((message) => message.id === turn.assistantId)
+        if (anchored) {
+          this.publish({ type: 'copilot.message', payload: anchored })
+        }
+        return
+      }
+      this.messages = this.messages.map((message) =>
+        message.id === turn.assistantId ? { ...message, content: turn.text } : message,
+      )
+      this.publish({ type: 'copilot.delta', payload: { scope, messageId: turn.assistantId, delta: update.text } })
+      return
+    }
+    if (update.type === 'thought') {
+      this.appendThought(turn, update.text)
+      return
+    }
+    if (update.type === 'tool_call') {
+      this.closeThought(turn)
+      this.applyAgentToolCall(turn, update)
+      this.publishCopilotProgress(scope, {
+        title: update.title,
+        detail: update.detail ? compactLine(update.detail) : update.status,
+        status: 'running',
+      })
+      return
+    }
+    if (update.type === 'plan') {
+      this.closeThought(turn)
+      this.applyPlanUpdate(turn, update.entries)
+      return
+    }
+    this.publishCopilotProgress(scope, { title: update.title, detail: update.detail, status: 'running' })
+  }
+
+  /** Stream a thought chunk into the turn's open think-block timeline item. */
+  private appendThought(turn: CopilotTurn, text: string) {
+    const now = Date.now()
+    if (!turn.thought) {
+      const block: CopilotToolCall = {
+        id: id('toolcall'),
+        scope: turn.scope,
+        title: 'Thinking',
+        kind: 'think',
+        status: 'running',
+        origin: 'agent',
+        output: '',
+        createdAt: this.nextStamp(),
+        updatedAt: now,
+      }
+      turn.thought = block
+      this.toolCalls = [...this.toolCalls, block]
+    }
+    turn.thought = { ...turn.thought, output: clipBlock(`${turn.thought.output ?? ''}${text}`), updatedAt: now }
+    this.toolCalls = this.toolCalls.map((item) => (item.id === turn.thought!.id ? turn.thought! : item))
+    this.publish({ type: 'copilot.toolcall.updated', payload: turn.thought })
+  }
+
+  /** Finalize the open thought block; journaled once here rather than per streamed chunk. */
+  private closeThought(turn: CopilotTurn) {
+    const open = turn.thought
+    if (!open) {
+      return
+    }
+    turn.thought = undefined
+    const closed: CopilotToolCall = { ...open, status: 'completed', updatedAt: Date.now() }
+    this.toolCalls = this.toolCalls.map((item) => (item.id === closed.id ? closed : item))
+    this.journal.recordToolCall(closed.scope, closed)
+    this.publish({ type: 'copilot.toolcall.updated', payload: closed })
+  }
+
+  /** Surface a tool execution the agent reported (built-in shell/file/web tools, MCP reads). */
+  private applyAgentToolCall(turn: CopilotTurn, update: Extract<DriverUpdate, { type: 'tool_call' }>) {
+    if (GROVE_INSTRUMENTED_TOOLS.has(agentToolName(update.title))) {
+      return
+    }
+    const scope = turn.scope
+    // Scope the id to the turn: kimi numbers its tool calls per process and the print driver
+    // spawns a fresh kimi each turn, so a bare `update.id` (or its tool-name fallback) would
+    // collide across turns — the new card would overwrite an old one and inherit its stale
+    // position. The per-turn assistantId makes each turn's tool calls distinct.
+    const toolCallId = `agent-${turn.assistantId}-${update.id}`
+    const existing = this.toolCalls.find((item) => item.id === toolCallId)
+    const next: CopilotToolCall = {
+      id: toolCallId,
+      scope,
+      title: update.title || existing?.title || 'tool',
+      kind: update.kind ?? existing?.kind ?? 'other',
+      status: update.status,
+      origin: 'agent',
+      detail: update.detail ? clipBlock(update.detail, 600, 12) : existing?.detail,
+      output: update.output ? clipBlock(update.output) : existing?.output,
+      createdAt: existing?.createdAt ?? this.nextStamp(),
+      updatedAt: Date.now(),
+    }
+    this.toolCalls = existing
+      ? this.toolCalls.map((item) => (item.id === toolCallId ? next : item))
+      : [...this.toolCalls, next]
+    this.journal.recordToolCall(scope, next)
+    this.publish({ type: 'copilot.toolcall.updated', payload: next })
+  }
+
+  /** Upsert this turn's plan checklist; it ticks off in place as the agent progresses. */
+  private applyPlanUpdate(turn: CopilotTurn, entries: Array<{ title: string; status: string }>) {
+    if (!turn.planId) {
+      turn.planId = `plan-${turn.assistantId}`
+    }
+    const existing = this.plans.find((plan) => plan.id === turn.planId)
+    const next: CopilotPlanState = {
+      id: turn.planId,
+      scope: turn.scope,
+      entries: entries
+        .filter((entry) => entry.title.trim())
+        .map((entry) => ({ title: entry.title, status: toPlanEntryStatus(entry.status) })),
+      createdAt: existing?.createdAt ?? this.nextStamp(),
+      updatedAt: Date.now(),
+    }
+    this.plans = existing ? this.plans.map((plan) => (plan.id === next.id ? next : plan)) : [...this.plans, next]
+    this.journal.recordPlan(turn.scope, next)
+    this.publish({ type: 'copilot.plan', payload: next })
+  }
+
+  private appendMessage(message: CopilotMessage) {
+    this.messages = [...this.messages, message]
+    if (message.scope) {
+      this.journal.recordMessage(message.scope, message)
+    }
+    this.publish({ type: 'copilot.message', payload: message })
+  }
+
+  private startToolCall(
+    scope: CopilotScope,
+    title: string,
+    kind: CopilotToolCall['kind'],
+    vmId: string | undefined,
+    detail: string,
+  ): CopilotToolCall {
+    const toolCall: CopilotToolCall = {
+      id: id('toolcall'),
+      scope,
+      title,
+      kind,
+      status: 'running',
+      vmId,
+      detail: compactLine(detail, 240),
+      createdAt: this.nextStamp(),
+      updatedAt: Date.now(),
+    }
+    this.toolCalls = [...this.toolCalls, toolCall]
+    this.journal.recordToolCall(scope, toolCall)
+    this.publish({ type: 'copilot.toolcall.updated', payload: toolCall })
+    return toolCall
+  }
+
+  private finishToolCall(toolCall: CopilotToolCall, status: CopilotToolCall['status'], output?: string) {
+    const updated: CopilotToolCall = {
+      ...toolCall,
+      status,
+      // Line structure is preserved: the timeline renders output as a terminal block.
+      output: output ? clipBlock(output) : toolCall.output,
+      updatedAt: Date.now(),
+    }
+    this.toolCalls = this.toolCalls.map((item) => (item.id === toolCall.id ? updated : item))
+    this.journal.recordToolCall(toolCall.scope, updated)
+    this.publish({ type: 'copilot.toolcall.updated', payload: updated })
+  }
+
+  private addProposal(proposal: ActionProposal) {
+    this.proposals = [proposal, ...this.proposals]
+    if (proposal.scope) {
+      this.journal.recordProposal(proposal.scope, proposal)
+    }
+    this.publish({ type: 'copilot.proposal.updated', payload: proposal })
+  }
+
+  private updateProposal(proposal: ActionProposal) {
+    this.proposals = this.proposals.map((item) => (item.id === proposal.id ? proposal : item))
+    if (proposal.scope) {
+      this.journal.recordProposal(proposal.scope, proposal)
+    }
+    this.publish({ type: 'copilot.proposal.updated', payload: proposal })
+  }
+
+  private currentProposal(proposal: ActionProposal) {
+    return this.proposals.find((item) => item.id === proposal.id) ?? proposal
+  }
+
+  /** Block a gated tool call until the user decides, or auto-deny after a timeout. */
+  private awaitDecision(proposalId: string): Promise<CopilotPermissionDecision> {
+    return new Promise<CopilotPermissionDecision>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingPermissions.delete(proposalId)
+        const proposal = this.proposals.find((item) => item.id === proposalId)
+        if (proposal && proposal.status === 'awaiting_confirmation') {
+          this.updateProposal({ ...proposal, status: 'dismissed', result: 'No response; timed out.' })
+        }
+        resolve('deny')
+      }, PERMISSION_TIMEOUT_MS)
+      if (typeof timer.unref === 'function') {
+        timer.unref()
+      }
+      this.pendingPermissions.set(proposalId, { resolve, timer })
+    })
+  }
+
+  private permissionProposal(
+    scope: CopilotScope,
+    vm: VM,
+    command: string,
+    reason: string,
+    toolCallId: string,
+  ): ActionProposal {
+    const classification = classifyCommand(command)
+    return {
+      id: id('proposal'),
+      vmId: vm.id,
+      scope,
+      targetVmIds: [vm.id],
+      title: `Run on ${vm.name}`,
+      description: reason,
+      command,
+      actionType: 'custom_command',
+      risk: classification.mutating ? 'medium' : 'low',
+      status: 'awaiting_confirmation',
+      toolCallId,
+      createdAt: Date.now(),
+    }
+  }
+
+  private fleetPermissionProposal(
+    scope: CopilotScope,
+    targets: VM[],
+    command: string,
+    reason: string,
+    toolCallId: string,
+  ): ActionProposal {
+    return {
+      id: id('proposal'),
+      vmId: targets[0].id,
+      scope,
+      targetVmIds: targets.map((vm) => vm.id),
+      title: `Run on ${targets.length} VM${targets.length === 1 ? '' : 's'}`,
+      description: `${reason} Targets: ${targets.map((vm) => vm.name).join(', ')}.`,
+      command,
+      actionType: 'patch_vms',
+      risk: 'high',
+      status: 'awaiting_confirmation',
+      toolCallId,
+      createdAt: Date.now(),
+    }
+  }
+
+  private async executeGatedCommand(input: {
+    scope: CopilotScope
+    vm: VM
+    command: string
+    reason: string
+    toolCall: CopilotToolCall
+    proposalId?: string
+  }): Promise<ToolResult> {
+    const run = await this.mutationLock.run(
+      input.vm.id,
+      () => this.ssh.executeCommand({ vm: input.vm, command: input.command, actor: 'copilot', mutating: true }),
+      () => this.publishCopilotProgress(input.scope, { title: `Queued behind work on ${input.vm.name}`, status: 'running' }),
+    )
+    this.recordCommandActivity(input.vm.id, 'Copilot action', run, input.proposalId)
+    this.finishToolCall(input.toolCall, run.status === 'completed' ? 'completed' : 'failed', commandOutput(run))
+    if (input.proposalId) {
+      const proposal = this.proposals.find((item) => item.id === input.proposalId)
+      if (proposal) {
+        this.updateProposal({
+          ...proposal,
+          status: run.status === 'completed' ? 'executed' : 'dismissed',
+          result: run.status === 'completed' ? run.summary : run.stderr || run.summary,
+        })
+      }
+    }
+    return toolResultFromRun(run, input.reason)
+  }
+
+  private recordCommandActivity(vmId: string, title: string, run: CommandRun, proposalId?: string) {
+    this.addActivity(
+      vmId,
+      makeActivity(title, run.summary, run.status === 'failed' ? 'critical' : 'success'),
+      'copilot',
+      { commandRunId: run.id, proposalId },
+    )
+  }
+
+  /** Execute a suggestion-button proposal (patch_vms or a single command) on confirmation. */
+  private async runLegacyProposal(proposal: ActionProposal) {
+    if (proposal.actionType === 'patch_vms') {
+      const targets = runningVms(this.vms)
+      const runs = await this.fanOutCommand({
+        targets,
+        command: proposal.command,
+        proposalId: proposal.id,
+        activityLabel: 'Fleet patch',
+      })
+      const completed = runs.filter((run) => run.status === 'completed').length
+      const results = runs.map((run, index) => `${targets[index].name}: ${run.status} - ${run.summary}`)
+      const summary = targets.length
+        ? `Fleet patch attempted on ${targets.length} VM${targets.length === 1 ? '' : 's'}; ${completed} succeeded.`
+        : 'No running VMs were available for patching.'
+      const updated: ActionProposal = {
+        ...proposal,
+        status: targets.length ? 'executed' : 'dismissed',
+        result: [summary, ...results].join('\n'),
+      }
+      this.updateProposal(updated)
+      return { proposal: updated }
+    }
+
+    const vm = this.requireVm(proposal.vmId)
+    const classification = classifyCommand(proposal.command)
+    const run = await this.mutationLock.run(vm.id, () =>
+      this.ssh.executeCommand({ vm, command: proposal.command, actor: 'copilot', mutating: classification.mutating }),
+    )
+    const updated: ActionProposal = {
       ...proposal,
       status: run.status === 'completed' ? 'executed' : 'dismissed',
-      result:
-        proposal.actionType === 'custom_command' || proposal.command.trim() === 'ls'
-          ? run.stdout || run.stderr || run.summary
-          : run.summary,
+      result: proposal.actionType === 'custom_command' ? run.stdout || run.stderr || run.summary : run.summary,
     }
-
-    this.proposals = this.proposals.map((item) => (item.id === proposalId ? updatedProposal : item))
-    this.publish({ type: 'copilot.proposal.updated', payload: updatedProposal })
-    this.addActivity(vm.id, makeActivity(proposal.title, run.summary, run.status === 'failed' ? 'critical' : 'success'), 'copilot', {
-      commandRunId: run.id,
-      proposalId: proposal.id,
-    })
-
-    return { proposal: updatedProposal, commandRun: run }
+    this.updateProposal(updated)
+    this.recordCommandActivity(vm.id, proposal.title, run, proposal.id)
+    return { proposal: updated }
   }
 
   async openTerminal(vmId: string) {
@@ -1486,33 +2220,6 @@ export class GroveStore {
     saveAppRunnerServices(this.vms.flatMap((vm) => vm.appServices))
   }
 
-  private customCommandProposal(vm: VM, input: CustomSshProposalInput): ActionProposal {
-    const classification = classifyCommand(input.command)
-    return {
-      id: id('proposal'),
-      vmId: vm.id,
-      title: input.title,
-      description: input.description,
-      command: input.command,
-      actionType: 'custom_command',
-      risk: classification.mutating ? input.risk : 'low',
-      status: 'pending_confirmation',
-    }
-  }
-
-  private sftpTransferProposal(vm: VM, input: SftpTransferPlanInput): ActionProposal {
-    return {
-      id: id('proposal'),
-      vmId: vm.id,
-      title: `Plan ${input.direction} transfer for ${vm.name}`,
-      description: `${input.description} ${input.source} -> ${input.target}`,
-      command: `sftp -P ${vm.connection.port} ${vm.connection.user}@${vm.connection.host}`,
-      actionType: 'transfer_file',
-      risk: 'low',
-      status: 'pending_confirmation',
-    }
-  }
-
   private replaceVm(updatedVm: VM) {
     this.vms = this.vms.map((vm) => (vm.id === updatedVm.id ? updatedVm : vm))
     this.publish({ type: 'vm.updated', payload: updatedVm })
@@ -1546,14 +2253,15 @@ export class GroveStore {
   }
 
   private publishCopilotProgress(
-    vmId: string,
-    progress: Omit<CopilotProgressEvent, 'id' | 'vmId' | 'timestamp'>,
+    scope: CopilotScope,
+    progress: Omit<CopilotProgressEvent, 'id' | 'vmId' | 'scope' | 'timestamp'>,
   ) {
     this.publish({
       type: 'copilot.progress',
       payload: {
         id: id('copilot-progress'),
-        vmId,
+        vmId: scope,
+        scope,
         timestamp: nowLabel(),
         ...progress,
       },

@@ -1,4 +1,4 @@
-import { CheckCircle2, KeyRound, PenLine, PlugZap, Save, ServerCog, ShieldAlert } from 'lucide-react'
+import { CheckCircle2, PenLine, PlugZap, Save, ServerCog, ShieldAlert } from 'lucide-react'
 import { useState } from 'react'
 import type { CopilotProviderStatus, VM } from '../types'
 import { StatusPill } from './StatusPill'
@@ -94,7 +94,7 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
       <section className="rounded border border-slate-200 bg-white">
         <header className="border-b border-slate-200 px-3 py-2">
           <h2 className="text-sm font-semibold text-slate-950">VM metadata</h2>
-          <p className="text-xs text-slate-500">Provider and inventory labels</p>
+          <p className="text-xs text-slate-500">Provider and health</p>
         </header>
         <div className="space-y-3 p-3">
           <div className="flex items-center gap-3 rounded border border-slate-200 bg-white p-3">
@@ -107,19 +107,6 @@ export function SettingsTab({ vm, providerStatus, onTestConnection, onEditVm, on
           <div className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-white p-3">
             <span className="text-sm font-medium text-slate-700">Health</span>
             <StatusPill status={vm.health} />
-          </div>
-          <div className="rounded border border-slate-200 bg-white p-3">
-            <div className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-700">
-              <KeyRound className="h-4 w-4 text-slate-500" aria-hidden="true" />
-              Tags
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {vm.tags.map((tag) => (
-                <span key={tag} className="rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600">
-                  {tag}
-                </span>
-              ))}
-            </div>
           </div>
           {vm.connection.keyStatus === 'missing' ? (
             <div className="flex gap-2 rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">

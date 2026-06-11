@@ -112,7 +112,6 @@ export const vms: VM[] = [
       region: 'workstation',
       node: 'grove-host',
     },
-    tags: ['build', 'ci', 'linux'],
     health: 'healthy',
     lifecycle: 'running',
     connection: {
@@ -192,7 +191,6 @@ export const vms: VM[] = [
       region: 'workstation',
       node: 'grove-host',
     },
-    tags: ['database', 'staging', 'linux'],
     health: 'warning',
     lifecycle: 'running',
     connection: {
@@ -272,7 +270,6 @@ export const vms: VM[] = [
       region: 'desktop',
       node: 'grove-host',
     },
-    tags: ['experiment', 'gpu', 'linux'],
     health: 'offline',
     lifecycle: 'stopped',
     connection: {
@@ -516,8 +513,10 @@ export const initialMessages: CopilotMessage[] = [
     id: 'msg-1',
     role: 'assistant',
     content:
-      'Ready. Copilot is online and will write work updates here while it inspects, plans, or runs approved actions.',
+      'Ready. Copilot drives operations through kimi-code. Select All VMs for fleet context, or a VM to focus.',
     timestamp: '11:17',
+    scope: 'fleet',
+    createdAt: 1,
   },
 ]
 
@@ -525,11 +524,14 @@ export const initialProposals: ActionProposal[] = [
   {
     id: 'proposal-1',
     vmId: 'vm-cedar',
+    scope: 'vm:vm-cedar',
+    targetVmIds: ['vm-cedar'],
     title: 'Explain disk pressure',
     description: 'Check the largest PostgreSQL paths and summarize likely cleanup targets.',
     command: 'sudo du -xh /var/lib/postgresql | sort -h | tail -20',
     actionType: 'explain_metrics',
     risk: 'low',
-    status: 'draft',
+    status: 'pending_confirmation',
+    createdAt: 2,
   },
 ]

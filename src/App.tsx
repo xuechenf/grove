@@ -18,6 +18,7 @@ import { ActivityTab } from './components/ActivityTab'
 import { AppRunnerTab } from './components/AppRunnerTab'
 import { CopilotPanel } from './components/CopilotPanel'
 import { FilesTab } from './components/FilesTab'
+import { FleetOverviewTab } from './components/FleetOverviewTab'
 import { IconButton } from './components/IconButton'
 import { LifecycleControls } from './components/LifecycleControls'
 import { OverviewTab } from './components/OverviewTab'
@@ -29,14 +30,16 @@ import { TransferQueue } from './components/TransferQueue'
 import { VmEditorDialog } from './components/VmEditorDialog'
 import {
   apiDisabled,
-  confirmCopilotProposal,
+  cancelCopilot,
   createAppRunnerService as createAppRunnerProfile,
-  createCopilotProposal,
   createEventsSocket,
+  type EventsSocketHandle,
   createTransfer as createTransferJob,
   createVm as createVmProfile,
+  decideCopilotProposal,
   deleteAppRunnerService as deleteAppRunnerProfile,
   deleteVm,
+  getBootstrap,
   getCopilotProvider,
   getLocalDefaults,
   getSnapshot,
@@ -49,6 +52,7 @@ import {
   refreshVm,
   saveCopilotProvider,
   sendCopilotMessage,
+  setApiToken,
   updateAppRunnerService as updateAppRunnerProfile,
   updateVm as updateVmProfile,
 } from './lib/api'
@@ -63,12 +67,16 @@ import {
   vms as fixtureVms,
 } from './data/fixtures'
 import type {
-  ActionProposal,
   AppRunnerService,
   AppRunnerServiceInput,
   ActivityEvent,
+  CopilotPermissionDecision,
+  CopilotPlanState,
   CopilotProviderStatus,
   CopilotProgressEvent,
+  CopilotRuntimeStatus,
+  CopilotScope,
+  CopilotToolCall,
   FileNode,
   LocalDefaults,
   ServerEvent,
@@ -78,6 +86,7 @@ import type {
   VMAction,
   VmConnectionInput,
 } from './types'
+import { scopeVmId, vmScope } from './types'
 
 const tabs: Array<{ value: TabId; label: string; icon: ReactNode }> = [
   { value: 'overview', label: 'Overview', icon: <LayoutDashboard className="h-4 w-4" aria-hidden="true" /> },
@@ -252,7 +261,6 @@ function localVmFromInput(input: VmConnectionInput, currentVms: VM[], existing?:
       region: existing?.provider.region ?? 'remote',
       node: ipAddress,
     },
-    tags: existing?.tags.length ? existing.tags : ['ssh'],
     health: existing?.health ?? 'warning',
     lifecycle: existing?.lifecycle ?? 'running',
     connection: {
@@ -311,94 +319,6 @@ function localAppRunnerService(vm: VM, input: AppRunnerServiceInput, existing?: 
   }
 }
 
-function proposalFor(type: ActionProposal['actionType'], vm: VM, activeTab: TabId): ActionProposal {
-  const base = {
-    id: `proposal-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    vmId: vm.id,
-    status: 'pending_confirmation' as const,
-  }
-
-  if (type === 'inspect_logs') {
-    return {
-      ...base,
-      title: `Inspect logs on ${vm.name}`,
-      description: `Collect recent service and system logs for the current ${activeTab} context.`,
-      command: 'sudo journalctl -p warning..alert -n 120 --no-pager',
-      actionType: type,
-      risk: 'low',
-    }
-  }
-
-  if (type === 'restart_service') {
-    return {
-      ...base,
-      title: `Restart degraded service`,
-      description: 'Prepare a service restart with a status check before and after execution.',
-      command: 'sudo systemctl status wal-archive && sudo systemctl restart wal-archive && sudo systemctl status wal-archive',
-      actionType: type,
-      risk: 'medium',
-    }
-  }
-
-  if (type === 'snapshot') {
-    return {
-      ...base,
-      title: `Create safety snapshot`,
-      description: 'Capture the VM before lifecycle changes or command execution.',
-      command: `vmctl snapshot create ${vm.name} --label copilot-${new Date().toISOString().slice(0, 10)}`,
-      actionType: type,
-      risk: 'low',
-    }
-  }
-
-  if (type === 'transfer_file') {
-    return {
-      ...base,
-      title: `Stage file transfer`,
-      description: 'Plan an upload/download job and flag overwrite conflicts before transfer.',
-      command: `sftp -P ${vm.connection.port} ${vm.connection.user}@${vm.connection.host}`,
-      actionType: type,
-      risk: 'low',
-    }
-  }
-
-  if (type === 'patch_vms') {
-    return {
-      ...base,
-      title: 'Patch all running VMs',
-      description: 'Run an OS package update plan across every running Linux VM after confirmation.',
-      command: [
-        'set -e',
-        'SUDO=""',
-        'if [ "$(id -u)" -ne 0 ]; then SUDO="sudo -n"; fi',
-        'if command -v apt-get >/dev/null 2>&1; then',
-        '  export DEBIAN_FRONTEND=noninteractive',
-        '  $SUDO apt-get update',
-        '  $SUDO apt-get -y upgrade',
-        'elif command -v dnf >/dev/null 2>&1; then',
-        '  $SUDO dnf -y upgrade',
-        'elif command -v yum >/dev/null 2>&1; then',
-        '  $SUDO yum -y update',
-        'else',
-        '  echo "No supported package manager found" >&2',
-        '  exit 1',
-        'fi',
-      ].join('\n'),
-      actionType: type,
-      risk: 'high',
-    }
-  }
-
-  return {
-    ...base,
-    title: `Explain ${vm.name} metrics`,
-    description: 'Summarize resource pressure and recommend next checks.',
-    command: 'uptime && free -h && df -h && ps aux --sort=-%mem | head',
-    actionType: type,
-    risk: 'low',
-  }
-}
-
 function applyLifecycle(vm: VM, action: VMAction): VM {
   if (action.id === 'start') {
     return {
@@ -448,9 +368,15 @@ function App() {
   const [transfers, setTransfers] = useState<TransferJob[]>(initialTransfers)
   const [messages, setMessages] = useState(initialMessages)
   const [proposals, setProposals] = useState(initialProposals)
+  const [toolCalls, setToolCalls] = useState<CopilotToolCall[]>([])
+  const [plans, setPlans] = useState<CopilotPlanState[]>([])
+  const [copilotScope, setCopilotScope] = useState<CopilotScope>('fleet')
   const [copilotProgress, setCopilotProgress] = useState<CopilotProgressEvent[]>([])
-  const [copilotBusyByVm, setCopilotBusyByVm] = useState<Record<string, boolean>>({})
+  const [copilotBusyByScope, setCopilotBusyByScope] = useState<Record<string, boolean>>({})
+  const [copilotRuntime, setCopilotRuntime] = useState<CopilotRuntimeStatus>({ driver: 'mock', state: 'disabled' })
   const [providerStatus, setProviderStatus] = useState<CopilotProviderStatus>(initialProviderStatus)
+  const deltaBufferRef = useRef<Map<string, string>>(new Map())
+  const deltaFrameRef = useRef<number | null>(null)
   const [pendingAction, setPendingAction] = useState<VMAction | null>(null)
   const [conflict, setConflict] = useState<ConflictState | null>(null)
   const [vmEditorMode, setVmEditorMode] = useState<'add' | 'edit' | null>(null)
@@ -466,6 +392,48 @@ function App() {
 
     let mounted = true
 
+    // Batch streamed token deltas into one render per animation frame, not one per token.
+    const flushDeltas = () => {
+      deltaFrameRef.current = null
+      const buffer = deltaBufferRef.current
+      if (buffer.size === 0) {
+        return
+      }
+      const pending = new Map(buffer)
+      buffer.clear()
+      setMessages((current) =>
+        current.map((message) =>
+          pending.has(message.id) ? { ...message, content: message.content + pending.get(message.id)! } : message,
+        ),
+      )
+    }
+    const queueDelta = (messageId: string, delta: string) => {
+      const buffer = deltaBufferRef.current
+      buffer.set(messageId, (buffer.get(messageId) ?? '') + delta)
+      if (deltaFrameRef.current != null) {
+        return
+      }
+      deltaFrameRef.current =
+        typeof requestAnimationFrame === 'function'
+          ? requestAnimationFrame(flushDeltas)
+          : (setTimeout(flushDeltas, 16) as unknown as number)
+    }
+
+    const refreshBootstrap = () => {
+      getBootstrap()
+        .then((bootstrap) => {
+          if (!mounted) {
+            return
+          }
+          setApiToken(bootstrap.token ?? undefined)
+          setCopilotRuntime(bootstrap.runtime)
+        })
+        .catch(() => {
+          // Bootstrap (and thus the token) becomes available once the backend is online.
+        })
+    }
+    refreshBootstrap()
+
     getSnapshot()
       .then((snapshot) => {
         if (!mounted) {
@@ -476,6 +444,9 @@ function App() {
         setTransfers(snapshot.transfers)
         setMessages(snapshot.messages)
         setProposals(snapshot.proposals)
+        setToolCalls(snapshot.toolCalls ?? [])
+        setPlans(snapshot.plans ?? [])
+        setCopilotRuntime(snapshot.runtime ?? { driver: 'mock', state: 'disabled' })
         setSelectedVmId((current) => selectAvailableVm(current, snapshot.vms))
       })
       .catch(() => {
@@ -498,14 +469,19 @@ function App() {
       }
     }
 
-    let socket: WebSocket | undefined
+    let socket: EventsSocketHandle | undefined
     try {
+      // On reconnect (e.g. a backend restart) the server pushes a fresh snapshot through
+      // the socket; the bootstrap re-fetch picks up the rotated per-boot UI token.
       socket = createEventsSocket((event: ServerEvent) => {
         if (event.type === 'snapshot') {
           setVms(event.payload.vms)
           setTransfers(event.payload.transfers)
           setMessages(event.payload.messages)
           setProposals(event.payload.proposals)
+          setToolCalls(event.payload.toolCalls ?? [])
+          setPlans(event.payload.plans ?? [])
+          setCopilotRuntime(event.payload.runtime ?? { driver: 'mock', state: 'disabled' })
           setSelectedVmId((current) => selectAvailableVm(current, event.payload.vms))
           return
         }
@@ -530,15 +506,39 @@ function App() {
         }
 
         if (event.type === 'copilot.message') {
+          if (!event.payload.streaming) {
+            deltaBufferRef.current.delete(event.payload.id)
+          }
           setMessages((current) => appendOrReplaceById(current, event.payload))
+          return
+        }
+
+        if (event.type === 'copilot.delta') {
+          queueDelta(event.payload.messageId, event.payload.delta)
+          return
+        }
+
+        if (event.type === 'copilot.toolcall.updated') {
+          setToolCalls((current) => upsertById(current, event.payload))
+          return
+        }
+
+        if (event.type === 'copilot.plan') {
+          setPlans((current) => upsertById(current, event.payload))
+          return
+        }
+
+        if (event.type === 'copilot.runtime') {
+          setCopilotRuntime(event.payload)
           return
         }
 
         if (event.type === 'copilot.progress') {
           setCopilotProgress((current) => updateCopilotProgress(current, event.payload))
-          setCopilotBusyByVm((current) => ({
+          const scopeKey = event.payload.scope ?? event.payload.vmId
+          setCopilotBusyByScope((current) => ({
             ...current,
-            [event.payload.vmId]: event.payload.status === 'running',
+            [scopeKey]: event.payload.status === 'running',
           }))
           return
         }
@@ -546,7 +546,7 @@ function App() {
         if (event.type === 'copilot.proposal.updated') {
           setProposals((current) => upsertById(current, event.payload))
         }
-      })
+      }, { onReconnect: refreshBootstrap })
     } catch {
       socket = undefined
     }
@@ -558,6 +558,47 @@ function App() {
   }, [])
 
   const selectedVm = useMemo(() => vms.find((vm) => vm.id === selectedVmId), [selectedVmId, vms])
+
+  const scopeMessages = useMemo(
+    () => messages.filter((message) => (message.scope ?? 'fleet') === copilotScope),
+    [messages, copilotScope],
+  )
+  const scopeProposals = useMemo(
+    () => proposals.filter((proposal) => (proposal.scope ?? vmScope(proposal.vmId)) === copilotScope),
+    [proposals, copilotScope],
+  )
+  const scopeToolCalls = useMemo(
+    () => toolCalls.filter((toolCall) => toolCall.scope === copilotScope),
+    [toolCalls, copilotScope],
+  )
+  const scopePlans = useMemo(() => plans.filter((plan) => plan.scope === copilotScope), [plans, copilotScope])
+  const scopeProgress = useMemo(
+    () => copilotProgress.filter((event) => (event.scope ?? event.vmId) === copilotScope),
+    [copilotProgress, copilotScope],
+  )
+  const scopeIsBusy = copilotBusyByScope[copilotScope] ?? false
+  const copilotScopeLabel = copilotScope === 'fleet' ? 'All VMs' : selectedVm?.name ?? scopeVmId(copilotScope) ?? 'VM'
+  const busyScopes = useMemo(
+    () => new Set(Object.entries(copilotBusyByScope).filter(([, busy]) => busy).map(([scope]) => scope)),
+    [copilotBusyByScope],
+  )
+  const attentionScopes = useMemo(
+    () =>
+      new Set(
+        proposals
+          .filter((proposal) => proposal.status === 'awaiting_confirmation')
+          .map((proposal) => proposal.scope ?? vmScope(proposal.vmId)),
+      ),
+    [proposals],
+  )
+
+  function selectScope(scope: CopilotScope) {
+    setCopilotScope(scope)
+    const vmId = scopeVmId(scope)
+    if (vmId) {
+      setSelectedVmId(vmId)
+    }
+  }
   const currentRemotePath = selectedVm ? remotePathByVm[selectedVm.id] ?? '/root' : '/'
   const remoteFiles = selectedVm ? remoteFilesByVmState[selectedVm.id] ?? [] : []
   const selectedRemoteId = selectedVm ? selectedRemoteByVm[selectedVm.id] : undefined
@@ -1214,56 +1255,23 @@ function App() {
   }
 
   async function sendMessage(content: string) {
-    if (!selectedVm) {
-      return
-    }
-
-    setCopilotBusyByVm((current) => ({ ...current, [selectedVm.id]: true }))
-    setCopilotProgress((current) =>
-      updateCopilotProgress(current, {
-        id: `copilot-progress-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        vmId: selectedVm.id,
-        title: 'Sending request to copilot',
-        detail: content,
-        status: 'running' as const,
-        timestamp: nowLabel(),
-      }),
-    )
+    const scope = copilotScope
+    setCopilotBusyByScope((current) => ({ ...current, [scope]: true }))
 
     if (!apiDisabled()) {
       try {
-        const response = await sendCopilotMessage({
-          vmId: selectedVm.id,
-          activeTab,
-          message: content,
-        })
+        // The user and streamed assistant messages arrive over the events socket; the POST
+        // resolves when the turn completes and is only a fallback for the final state.
+        const response = await sendCopilotMessage({ scope, message: content })
         setMessages((current) => response.messages.reduce((items, message) => appendOrReplaceById(items, message), current))
         setProposals((current) => response.proposals.reduce((items, proposal) => upsertById(items, proposal), current))
-        setCopilotBusyByVm((current) => ({ ...current, [selectedVm.id]: false }))
         return
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Copilot request failed.'
-        setCopilotBusyByVm((current) => ({ ...current, [selectedVm.id]: false }))
-        setCopilotProgress((current) =>
-          updateCopilotProgress(current, {
-            id: `copilot-progress-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            vmId: selectedVm.id,
-            title: 'Copilot request failed',
-            detail: message,
-            status: 'failed' as const,
-            timestamp: nowLabel(),
-          }),
-        )
+        setCopilotBusyByScope((current) => ({ ...current, [scope]: false }))
         setMessages((current) => [
           ...current,
-          {
-            id: `msg-${Date.now()}-assistant`,
-            role: 'assistant',
-            content: message,
-            timestamp: nowLabel(),
-            contextVmId: selectedVm.id,
-            contextTab: activeTab,
-          },
+          { id: `msg-${Date.now()}-assistant`, role: 'assistant', content: message, timestamp: nowLabel(), scope },
         ])
         return
       }
@@ -1271,16 +1279,28 @@ function App() {
 
     setMessages((current) => [
       ...current,
+      { id: `msg-${Date.now()}-user`, role: 'user', content, timestamp: nowLabel(), scope },
       {
         id: `msg-${Date.now()}-assistant`,
         role: 'assistant',
-        content: 'The local backend is unavailable, so copilot cannot contact Moonshot/Kimi.',
+        content: 'The local backend is offline. Start it with `npm run dev` to use the kimi copilot.',
         timestamp: nowLabel(),
-        contextVmId: selectedVm.id,
-        contextTab: activeTab,
+        scope,
       },
     ])
-    setCopilotBusyByVm((current) => ({ ...current, [selectedVm.id]: false }))
+    setCopilotBusyByScope((current) => ({ ...current, [scope]: false }))
+  }
+
+  async function cancelCopilotRun() {
+    const scope = copilotScope
+    if (!apiDisabled()) {
+      try {
+        await cancelCopilot(scope)
+      } catch {
+        // The run may have already finished; clearing busy below is enough.
+      }
+    }
+    setCopilotBusyByScope((current) => ({ ...current, [scope]: false }))
   }
 
   async function saveProvider(input: { apiKey: string; baseUrl: string; model: string }) {
@@ -1303,7 +1323,8 @@ function App() {
         try {
           const vm = await updateVmProfile(selectedVm.id, input)
           setVms((current) => upsertById(current, vm))
-          setSelectedVmId(vm.id)
+          // Route through selectScope so the panel leaves the fleet dashboard for the VM.
+          selectScope(vmScope(vm.id))
           return
         } catch (error) {
           if (!isApiUnavailableError(error)) {
@@ -1322,7 +1343,7 @@ function App() {
       try {
         const vm = await createVmProfile(input)
         setVms((current) => upsertById(current, vm))
-        setSelectedVmId(vm.id)
+        selectScope(vmScope(vm.id))
         return
       } catch (error) {
         if (!isApiUnavailableError(error)) {
@@ -1333,63 +1354,66 @@ function App() {
 
     const vm = localVmFromInput(input, vms)
     setVms((current) => [vm, ...current])
-    setSelectedVmId(vm.id)
+    selectScope(vmScope(vm.id))
   }
 
-  async function createProposal(type: ActionProposal['actionType']) {
-    if (!selectedVm) {
-      return
-    }
-
-    if (!apiDisabled()) {
-      try {
-        const proposal = await createCopilotProposal({
-          vmId: selectedVm.id,
-          activeTab,
-          actionType: type,
-        })
-        setProposals((current) => upsertById(current, proposal))
-        return
-      } catch {
-        // Fall back to local proposal state if the backend is unavailable.
-      }
-    }
-
-    setProposals((current) => [proposalFor(type, selectedVm, activeTab), ...current])
-  }
-
-  async function confirmProposal(proposalId: string) {
+  async function decideProposal(proposalId: string, decision: CopilotPermissionDecision) {
     const proposal = proposals.find((item) => item.id === proposalId)
     if (!proposal) {
       return
     }
 
+    // Acknowledge the click immediately: the card swaps its buttons for an "executing"
+    // state while the backend runs the command (the executed/dismissed update can take as
+    // long as the SSH command itself).
+    setProposals((current) => current.map((item) => (item.id === proposalId ? { ...item, decision } : item)))
+
     if (!apiDisabled()) {
       try {
-        const result = await confirmCopilotProposal(proposalId)
-        setProposals((current) => upsertById(current, result.proposal))
+        const result = await decideCopilotProposal(proposalId, decision)
+        // The executed/dismissed event can race ahead of this response over the socket
+        // (a fast command finishes before the HTTP response flushes). The response is a
+        // decision-time snapshot, so never let it regress a proposal that already settled.
+        setProposals((current) =>
+          current.map((item) => {
+            if (item.id !== proposalId) {
+              return item
+            }
+            const stillAwaiting = item.status === 'awaiting_confirmation' || item.status === 'pending_confirmation'
+            return stillAwaiting ? result.proposal : item
+          }),
+        )
         return
       } catch {
-        // Fall back to local confirmation state if the backend is unavailable.
+        // Fall back to local state if the backend is unavailable.
       }
     }
 
     setProposals((current) =>
       current.map((item) =>
         item.id === proposalId
-          ? { ...item, status: 'executed', result: 'Mock command completed and logged to activity.' }
+          ? {
+              ...item,
+              decision,
+              status: decision === 'deny' ? 'dismissed' : 'executed',
+              result: decision === 'deny' ? 'Dismissed by user.' : 'Mock command completed and logged to activity.',
+            }
           : item,
       ),
     )
-    addActivity(proposal.vmId, makeActivity(proposal.title, 'Copilot action executed from confirmed proposal.', 'success'))
+    if (decision !== 'deny') {
+      addActivity(proposal.vmId, makeActivity(proposal.title, 'Copilot action executed from confirmed proposal.', 'success'))
+    }
   }
 
   return (
     <div className="flex h-svh flex-col overflow-auto bg-slate-50 text-slate-900 lg:flex-row lg:overflow-hidden">
       <Sidebar
         vms={vms}
-        selectedVmId={selectedVmId}
-        onSelect={setSelectedVmId}
+        activeScope={copilotScope}
+        onSelectScope={selectScope}
+        busyScopes={busyScopes}
+        attentionScopes={attentionScopes}
         onAddVm={() => setVmEditorMode('add')}
       />
 
@@ -1405,15 +1429,18 @@ function App() {
           )}
         >
           <CopilotPanel
-            vm={selectedVm}
-            activeTab={activeTab}
-            messages={messages}
-            progress={selectedVm ? copilotProgress.filter((event) => event.vmId === selectedVm.id) : []}
-            proposals={selectedVm ? proposals.filter((proposal) => proposal.vmId === selectedVm.id) : []}
-            isBusy={selectedVm ? copilotBusyByVm[selectedVm.id] ?? false : false}
+            scope={copilotScope}
+            scopeLabel={copilotScopeLabel}
+            runtime={copilotRuntime}
+            messages={scopeMessages}
+            toolCalls={scopeToolCalls}
+            plans={scopePlans}
+            progress={scopeProgress}
+            proposals={scopeProposals}
+            isBusy={scopeIsBusy}
             onSendMessage={sendMessage}
-            onCreateProposal={createProposal}
-            onConfirmProposal={confirmProposal}
+            onDecideProposal={decideProposal}
+            onCancel={cancelCopilotRun}
           />
         </div>
 
@@ -1445,29 +1472,37 @@ function App() {
             <IconButton label="Expand VM workspace" onClick={() => setIsWorkspaceCollapsed(false)}>
               <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
             </IconButton>
-            <div className="mt-2 flex flex-col gap-1" aria-label="VM sections">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.value}
-                  type="button"
-                  aria-label={`Open ${tab.label}`}
-                  onClick={() => {
-                    setActiveTab(tab.value)
-                    setIsWorkspaceCollapsed(false)
-                  }}
-                  className={cx(
-                    'inline-flex h-9 w-9 items-center justify-center rounded border text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900',
-                    activeTab === tab.value ? 'border-slate-300 bg-slate-50 text-slate-950' : 'border-transparent',
-                  )}
-                >
-                  {tab.icon}
-                </button>
-              ))}
-            </div>
+            {copilotScope !== 'fleet' ? (
+              <div className="mt-2 flex flex-col gap-1" aria-label="VM sections">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    aria-label={`Open ${tab.label}`}
+                    onClick={() => {
+                      setActiveTab(tab.value)
+                      setIsWorkspaceCollapsed(false)
+                    }}
+                    className={cx(
+                      'inline-flex h-9 w-9 items-center justify-center rounded border text-slate-500 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900',
+                      activeTab === tab.value ? 'border-slate-300 bg-slate-50 text-slate-950' : 'border-transparent',
+                    )}
+                  >
+                    {tab.icon}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </section>
         ) : null}
         <div className={cx('flex min-h-0 flex-1 flex-col', isWorkspaceCollapsed && 'lg:hidden')}>
-        {selectedVm ? (
+        {copilotScope === 'fleet' ? (
+          <FleetOverviewTab
+            vms={vms}
+            onSelectVm={(vmId) => selectScope(vmScope(vmId))}
+            onCollapse={() => setIsWorkspaceCollapsed(true)}
+          />
+        ) : selectedVm ? (
           <>
             <header className="border-b border-slate-200 bg-white px-4 py-3">
               <div className="mb-3 flex flex-wrap items-start justify-between gap-3">

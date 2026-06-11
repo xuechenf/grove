@@ -93,7 +93,6 @@ function fixtureVmConfigs(): VmConfig[] {
     keyPath: vm.connection.keyStatus === 'present' ? `~/.ssh/${vm.connection.keyLabel}` : undefined,
     useAgent: true,
     os: vm.os,
-    labels: vm.tags,
     provider: vm.provider,
   }))
 }
@@ -113,7 +112,6 @@ export function vmFromConfig(config: VmConfig, fixture?: VM): VM {
       region: config.provider?.region ?? 'local',
       node: config.provider?.node ?? 'inventory',
     },
-    tags: config.labels ?? [],
     appServices: fixture?.appServices ?? [],
     connection: {
       host: config.host,

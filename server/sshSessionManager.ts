@@ -1,5 +1,6 @@
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, posix } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper } from 'ssh2'
 import type { CommandRun, FileNode, TerminalSession, TransferJob, VM } from '../src/types'
 import { collectLocalProjectFiles } from './localProjectFiles'
@@ -10,6 +11,8 @@ export interface CommandExecutionRequest {
   command: string
   actor: CommandRun['actor']
   mutating: boolean
+  /** Per-command budget. Defaults: 120s for reads, 600s for mutating commands. */
+  timeoutMs?: number
 }
 
 export interface SshSessionManager {
@@ -19,6 +22,8 @@ export interface SshSessionManager {
   listFiles(vm: VM, path: string): Promise<FileNode[]>
   transferFile?(request: FileTransferExecutionRequest): Promise<TransferJob>
   uploadDirectory?(request: DirectoryUploadExecutionRequest): Promise<DirectoryUploadResult>
+  /** Best-effort: establish the VM's connection ahead of the first command. Never rejects. */
+  warmConnection?(vm: VM): Promise<void>
 }
 
 export interface TerminalShellOptions {
@@ -67,6 +72,9 @@ function outputFor(command: string, vm: VM) {
   if (command.includes('__GROVE_PROCESSES__') && command.includes('__GROVE_SERVICES__')) {
     return {
       stdout: [
+        `CPU_PCT=${vm.metrics.cpuPercent}`,
+        `NET_RX_MBPS=${vm.metrics.networkInMbps}`,
+        `NET_TX_MBPS=${vm.metrics.networkOutMbps}`,
         `HOSTNAME=${vm.hostname}`,
         `OS=${vm.os}`,
         `UPTIME=${vm.metrics.uptime}`,
@@ -95,6 +103,28 @@ function outputFor(command: string, vm: VM) {
       stderr: '',
       exitCode: 0,
       summary: 'Runtime inventory collected over SSH.',
+    }
+  }
+
+  if (command.includes('__GROVE_UNIT_STATUS__')) {
+    const unitMatch = command.match(/systemctl status '([^']+)'/)
+    const unitName = unitMatch?.[1] ?? 'unknown.service'
+    const service = vm.services.find((item) => unitName.startsWith(item.name))
+    const state = service?.state ?? 'inactive'
+    return {
+      stdout: [
+        '__GROVE_UNIT_STATUS__',
+        `● ${unitName} - ${unitName}`,
+        `   Active: ${state === 'running' ? 'active (running)' : `inactive (${state})`}`,
+        '__GROVE_UNIT_LOGS__',
+        `Jun 11 09:00:01 ${vm.hostname} ${unitName}[1234]: started`,
+        `Jun 11 09:00:02 ${vm.hostname} ${unitName}[1234]: listening`,
+        '__GROVE_UNIT_PORTS__',
+        ...(service?.port ? [`LISTEN 0 511 0.0.0.0:${service.port} 0.0.0.0:* users:(("${service.name}",pid=1234,fd=6))`] : []),
+      ].join('\n'),
+      stderr: '',
+      exitCode: 0,
+      summary: 'Unit diagnostic collected over SSH.',
     }
   }
 
@@ -297,6 +327,22 @@ function fileTypeFromMode(mode: number): FileNode['type'] {
   return (mode & 0o170000) === 0o040000 ? 'folder' : 'file'
 }
 
+/** Average throughput of a finished transfer, measured from the local file's size. */
+function transferSpeedLabel(localPath: string, startedAtMs: number) {
+  try {
+    const bytes = statSync(localPath).size
+    const seconds = Math.max((Date.now() - startedAtMs) / 1000, 0.001)
+    const mbPerSecond = bytes / 1024 / 1024 / seconds
+    if (mbPerSecond >= 0.1) {
+      return `${mbPerSecond.toFixed(1)} MB/s`
+    }
+    const kbPerSecond = (bytes / 1024) / seconds
+    return `${Math.max(1, Math.round(kbPerSecond))} KB/s`
+  } catch {
+    return 'complete'
+  }
+}
+
 function formatModifiedTime(date: Date) {
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
@@ -357,7 +403,8 @@ export class RealSshSessionManager implements SshSessionManager {
     return this.executeCommandOnce(request, startedAt)
   }
 
-  private async executeCommandOnce({ vm, command, actor, mutating }: CommandExecutionRequest, startedAt: string): Promise<CommandRun> {
+  private async executeCommandOnce(request: CommandExecutionRequest, startedAt: string): Promise<CommandRun> {
+    const { vm, command, actor, mutating } = request
     let client: Client
     try {
       client = await this.getClient(vm)
@@ -366,6 +413,10 @@ export class RealSshSessionManager implements SshSessionManager {
       return this.failedCommandRun({ vm, command, actor, mutating, startedAt, message })
     }
 
+    // Mutating commands get a generous budget (confirmed fleet patches legitimately run
+    // apt upgrades); reads fail fast so a hung probe cannot hang the whole agent turn.
+    const timeoutMs = request.timeoutMs ?? (mutating ? 600_000 : 120_000)
+
     return new Promise((resolveCommand) => {
       client.exec(command, (error, stream) => {
         if (error) {
@@ -373,11 +424,50 @@ export class RealSshSessionManager implements SshSessionManager {
           return
         }
 
+        let settled = false
+        const timer = setTimeout(() => {
+          if (settled) {
+            return
+          }
+          settled = true
+          try {
+            stream.signal('KILL')
+          } catch {
+            // Some sshd configs reject signals; closing the channel still frees the turn.
+          }
+          stream.close()
+          resolveCommand(
+            this.failedCommandRun({
+              vm,
+              command,
+              actor,
+              mutating,
+              startedAt,
+              message: `Command timed out after ${Math.round(timeoutMs / 1000)}s and was terminated (the remote process may still be running).`,
+            }),
+          )
+        }, timeoutMs)
+        if (typeof timer.unref === 'function') {
+          timer.unref()
+        }
+
         let stdout = ''
         let stderr = ''
         let exitCode = 0
+        // Decode per-stream, not per-chunk: SSH packets split multi-byte UTF-8 characters
+        // (systemctl's `●` etc.) across chunk boundaries, which per-chunk toString() turns
+        // into replacement characters.
+        const stdoutDecoder = new StringDecoder('utf8')
+        const stderrDecoder = new StringDecoder('utf8')
         stream
           .on('close', (code?: number) => {
+            clearTimeout(timer)
+            if (settled) {
+              return
+            }
+            settled = true
+            stdout += stdoutDecoder.end()
+            stderr += stderrDecoder.end()
             exitCode = code ?? exitCode
             const outputSummary = command.includes('__GROVE_SHADOWSOCKS_INSTALLED_DIAGNOSTIC__')
               ? 'Shadowsocks installation diagnostic collected over SSH.'
@@ -400,10 +490,10 @@ export class RealSshSessionManager implements SshSessionManager {
             })
           })
           .on('data', (data: Buffer) => {
-            stdout += data.toString()
+            stdout += stdoutDecoder.write(data)
           })
           .stderr.on('data', (data: Buffer) => {
-            stderr += data.toString()
+            stderr += stderrDecoder.write(data)
           })
       })
     })
@@ -490,6 +580,7 @@ export class RealSshSessionManager implements SshSessionManager {
 
   async transferFile({ vm, direction, source, target, fileName, conflict }: FileTransferExecutionRequest): Promise<TransferJob> {
     const sftp = await this.getSftp(vm)
+    const startedAtMs = Date.now()
 
     try {
       if (direction === 'download') {
@@ -532,7 +623,7 @@ export class RealSshSessionManager implements SshSessionManager {
       fileName,
       status: 'completed',
       progress: 100,
-      speed: 'complete',
+      speed: transferSpeedLabel(direction === 'upload' ? expandPath(source) : target, startedAtMs),
       conflict,
     }
   }
@@ -571,18 +662,40 @@ export class RealSshSessionManager implements SshSessionManager {
     })
   }
 
+  /** Establish (or reuse) the VM's connection ahead of time so the first command skips the handshake. */
+  async warmConnection(vm: VM): Promise<void> {
+    try {
+      await this.getClient(vm)
+    } catch {
+      // Warm-up is best-effort; the command path reports its own connection errors.
+    }
+  }
+
   private getClient(vm: VM) {
     const existing = this.clients.get(vm.id)
     if (existing) {
       return existing
     }
 
-    const promise = this.createClient(vm)
-    this.clients.set(vm.id, promise)
+    // eslint-disable-next-line prefer-const -- assigned after `evict` closes over it; const would TDZ-crash on synchronous connect failures
+    let promise: Promise<Client> | undefined
+    let evicted = false
+    // Evict only our own cache entry: a stale client's late error/close must not evict a
+    // newer healthy client cached for the same VM.
+    const evict = () => {
+      evicted = true
+      if (promise && this.clients.get(vm.id) === promise) {
+        this.clients.delete(vm.id)
+      }
+    }
+    promise = this.createClient(vm, evict)
+    if (!evicted) {
+      this.clients.set(vm.id, promise)
+    }
     return promise
   }
 
-  private createClient(vm: VM) {
+  private createClient(vm: VM, evict: () => void) {
     const keyPath = vm.connection.keyLabel && vm.connection.keyLabel !== 'ssh-agent' ? expandPath(vm.connection.keyLabel) : undefined
     const config: ConnectConfig = {
       host: vm.connection.host,
@@ -590,6 +703,9 @@ export class RealSshSessionManager implements SshSessionManager {
       username: vm.connection.user,
       readyTimeout: 15000,
       keepaliveInterval: 15000,
+      // Declare the peer dead after two missed keepalives (~30s) instead of ssh2's default
+      // three, so silently dropped connections recycle sooner.
+      keepaliveCountMax: 2,
       privateKey: keyPath && existsSync(keyPath) ? readFileSync(keyPath) : undefined,
     }
 
@@ -604,19 +720,19 @@ export class RealSshSessionManager implements SshSessionManager {
         }
 
         settled = true
-        this.clients.delete(vm.id)
+        evict()
         reject(error)
       }
 
       const handleError = (error: Error) => {
-        this.clients.delete(vm.id)
+        evict()
         if (!ready) {
           rejectConnection(error)
         }
       }
 
       const handleCloseBeforeReady = () => {
-        this.clients.delete(vm.id)
+        evict()
         if (!ready) {
           rejectConnection(new Error('SSH connection closed before it was ready.'))
         }

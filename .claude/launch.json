@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "grove-fixtures-ui",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:GROVE_PORT='8799'; npx vite --host 127.0.0.1 --port 5199 --strictPort"
+      ],
+      "port": 5199
+    }
+  ]
+}

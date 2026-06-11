@@ -10,7 +10,7 @@ import { collectLocalProjectFiles } from './localProjectFiles'
 import { GroveStore } from './store'
 import { localEnvPath, saveMoonshotLocalEnv } from './env'
 import { resolveProjectStateReference } from './projectState'
-import type { CopilotAgentInput } from './copilotAgent'
+import { MockDriver, type MockScripter } from './drivers/mockDriver'
 import type { CommandRun, FileNode, TerminalSession, VM } from '../src/types'
 import type {
   CommandExecutionRequest,
@@ -25,17 +25,8 @@ const originalMoonshotApiKey = process.env.GROVE_MOONSHOT_API_KEY
 const originalMoonshotBaseUrl = process.env.GROVE_MOONSHOT_BASE_URL
 const originalMoonshotModel = process.env.GROVE_MOONSHOT_MODEL
 
-function appWithFakeCopilot(respond: (input: CopilotAgentInput) => Promise<string> | string) {
-  return createGroveApp(
-    new GroveStore(undefined, {
-      async respond(input) {
-        return {
-          content: await respond(input),
-          provider: 'moonshot',
-        }
-      },
-    }),
-  )
+function appWithMockCopilot(scripter?: MockScripter) {
+  return createGroveApp(new GroveStore(undefined, { driver: new MockDriver(scripter) }))
 }
 
 class RuntimeSampleSsh implements SshSessionManager {
@@ -49,6 +40,9 @@ class RuntimeSampleSsh implements SshSessionManager {
       startedAt: '00:00',
       completedAt: '00:00',
       stdout: [
+        'CPU_PCT=37',
+        'NET_RX_MBPS=12.5',
+        'NET_TX_MBPS=3.4',
         'HOSTNAME=real-host',
         'OS=Ubuntu 24.04 LTS',
         'UPTIME=up 2 days',
@@ -311,6 +305,13 @@ vms:
     const response = await request(app).get('/api/vms/vm-orchid').expect(200)
 
     expect(response.body.hostname).toBe('real-host')
+    // Rates come from the two-sample /proc diff, not hardcoded zeros.
+    expect(response.body.metrics.cpuPercent).toBe(37)
+    expect(response.body.metrics.networkInMbps).toBe(12.5)
+    expect(response.body.metrics.networkOutMbps).toBe(3.4)
+    // Alerts derive from the live sample: the degraded service surfaces, health follows.
+    expect(response.body.alerts).toContain('Service postgresql.service is degraded')
+    expect(response.body.health).toBe('warning')
     expect(response.body.services).toEqual([
       expect.objectContaining({
         name: 'nginx.service',
@@ -334,6 +335,35 @@ vms:
         command: '/usr/bin/node /srv/app.js',
       }),
     )
+  })
+
+  it('derives threshold alerts from a live sample and clears them when healthy', async () => {
+    class HighDiskSsh extends RuntimeSampleSsh {
+      async executeCommand(request: CommandExecutionRequest): Promise<CommandRun> {
+        const run = await super.executeCommand(request)
+        return { ...run, stdout: (run.stdout ?? '').replace('DISK_PCT=50%', 'DISK_PCT=93%').replace('DISK_USED_KB=51200', 'DISK_USED_KB=95232') }
+      }
+    }
+    const { app } = createGroveApp(new GroveStore(new HighDiskSsh()))
+    const response = await request(app).get('/api/vms/vm-orchid').expect(200)
+
+    expect(response.body.alerts.some((alert: string) => alert.startsWith('Disk usage at 93%'))).toBe(true)
+    expect(response.body.health).toBe('warning')
+    expect(response.body.alerts).not.toContain('No active alerts')
+  })
+
+  it('marks an unreachable VM with an alert on refresh failure', async () => {
+    class UnreachableSsh extends RuntimeSampleSsh {
+      async executeCommand(request: CommandExecutionRequest): Promise<CommandRun> {
+        const run = await super.executeCommand(request)
+        return { ...run, status: 'failed', stderr: 'connect ETIMEDOUT', summary: 'SSH connection failed.' }
+      }
+    }
+    const { app } = createGroveApp(new GroveStore(new UnreachableSsh()))
+    const response = await request(app).get('/api/vms/vm-orchid').expect(200)
+
+    expect(response.body.alerts).toEqual(['VM is unreachable over SSH'])
+    expect(response.body.health).toBe('critical')
   })
 
   it('runs a confirmed reboot action through the command path', async () => {
@@ -554,88 +584,396 @@ vms:
     }
   })
 
-  it('confirms copilot proposals through a separate non-terminal command run', async () => {
+  it('runs a confirmed suggestion proposal through the command path', async () => {
     const { app } = createGroveApp()
     const proposal = await request(app)
       .post('/api/copilot/proposals')
       .send({ vmId: 'vm-orchid', activeTab: 'overview', actionType: 'inspect_logs' })
       .expect(201)
-    const confirmation = await request(app).post(`/api/copilot/proposals/${proposal.body.id}/confirm`).expect(200)
+    const confirmation = await request(app)
+      .post(`/api/copilot/proposals/${proposal.body.id}/decision`)
+      .send({ decision: 'allow_once' })
+      .expect(200)
 
-    expect(confirmation.body.commandRun.actor).toBe('copilot')
     expect(confirmation.body.proposal.status).toBe('executed')
   })
 
-  it('requires Moonshot configuration for free-form copilot chat', async () => {
-    const { app } = createGroveApp()
+  it('streams a scoped assistant message from the kimi driver', async () => {
+    const scripter: MockScripter = (promptRequest) => [
+      { type: 'update', update: { type: 'message_delta', text: 'Looking at ' } },
+      { type: 'update', update: { type: 'message_delta', text: promptRequest.message } },
+      { type: 'final', text: `Checked: ${promptRequest.message}` },
+    ]
+    const { app } = appWithMockCopilot(scripter)
     const response = await request(app)
       .post('/api/copilot/messages')
-      .send({ vmId: 'vm-orchid', activeTab: 'terminal', message: 'patch all vms' })
-      .expect(400)
-
-    expect(response.body.error).toContain('Moonshot API key is not configured')
-  })
-
-  it('lets the configured copilot create a high-risk fleet patch proposal from chat', async () => {
-    const { app } = appWithFakeCopilot((input) => {
-      const result = input.runtime.createKnownProposal('patch_vms')
-      return `Kimi prepared a confirmed fleet patch proposal. ${result.summary}`
-    })
-    const response = await request(app)
-      .post('/api/copilot/messages')
-      .send({ vmId: 'vm-orchid', activeTab: 'terminal', message: 'patch all vms' })
+      .send({ scope: 'vm:vm-orchid', message: 'disk usage' })
       .expect(201)
 
-    expect(response.body.proposals[0].actionType).toBe('patch_vms')
-    expect(response.body.proposals[0].risk).toBe('high')
-    expect(response.body.proposals[0].status).toBe('pending_confirmation')
-    expect(response.body.proposals[0].command).toContain('apt-get update')
-    expect(response.body.messages[1].content).toContain('confirmed fleet patch proposal')
+    expect(response.body.messages[0].role).toBe('user')
+    expect(response.body.messages[1].role).toBe('assistant')
+    expect(response.body.messages[1].content).toBe('Checked: disk usage')
+    expect(response.body.messages[1].scope).toBe('vm:vm-orchid')
   })
 
-  it('lets the configured copilot run a Shadowsocks status diagnostic', async () => {
-    const { app, store } = appWithFakeCopilot(async (input) => {
-      const result = await input.runtime.inspectSystem('shadowsocks_running')
-      return `Kimi checked runtime status: ${result.summary}`
+  it('surfaces agent execution steps, thinking, and plans as timeline state', async () => {
+    const scripter: MockScripter = () => [
+      { type: 'update', update: { type: 'thought', text: 'Need to look at the VM first.' } },
+      {
+        type: 'update',
+        update: {
+          type: 'plan',
+          entries: [
+            { title: 'Inspect VM', status: 'in_progress' },
+            { title: 'Report', status: 'pending' },
+          ],
+        },
+      },
+      {
+        type: 'update',
+        update: { type: 'tool_call', id: 'call-1', title: 'get_vm', kind: 'read', status: 'running', detail: '{}' },
+      },
+      {
+        type: 'update',
+        update: {
+          type: 'tool_call',
+          id: 'call-1',
+          title: 'get_vm',
+          kind: 'read',
+          status: 'completed',
+          output: 'lifecycle: running\nhealth: ok',
+        },
+      },
+      {
+        type: 'update',
+        update: {
+          type: 'plan',
+          entries: [
+            { title: 'Inspect VM', status: 'completed' },
+            { title: 'Report', status: 'in_progress' },
+          ],
+        },
+      },
+      { type: 'final', text: 'All good.' },
+    ]
+    const { app, store } = appWithMockCopilot(scripter)
+    const planEvents: unknown[] = []
+    const unsubscribe = store.onEvent((event) => {
+      if (event.type === 'copilot.plan') {
+        planEvents.push(event.payload)
+      }
     })
+
+    await request(app).post('/api/copilot/messages').send({ scope: 'vm:vm-orchid', message: 'health?' }).expect(201)
+    unsubscribe()
+
+    const snapshot = store.snapshot()
+    const thought = snapshot.toolCalls.find((item) => item.kind === 'think')
+    expect(thought?.status).toBe('completed')
+    expect(thought?.output).toContain('Need to look at the VM first.')
+
+    const agentStep = snapshot.toolCalls.find((item) => item.title === 'get_vm')
+    expect(agentStep?.origin).toBe('agent')
+    expect(agentStep?.status).toBe('completed')
+    expect(agentStep?.output).toBe('lifecycle: running\nhealth: ok')
+
+    expect(planEvents.length).toBe(2)
+    expect(snapshot.plans).toHaveLength(1)
+    expect(snapshot.plans[0].entries.map((entry) => entry.status)).toEqual(['completed', 'in_progress'])
+  })
+
+  it('drops the agent-side view of tools Grove instruments itself', async () => {
+    const scripter: MockScripter = () => [
+      {
+        type: 'update',
+        update: {
+          type: 'tool_call',
+          id: 'call-1',
+          title: 'mcp__grove__run_command',
+          kind: 'execute',
+          status: 'running',
+          detail: 'uptime',
+        },
+      },
+      { type: 'final', text: 'done' },
+    ]
+    const { app, store } = appWithMockCopilot(scripter)
+
+    await request(app).post('/api/copilot/messages').send({ scope: 'vm:vm-orchid', message: 'uptime?' }).expect(201)
+
+    expect(store.snapshot().toolCalls.find((item) => item.id.startsWith('agent-'))).toBeUndefined()
+  })
+
+  it('anchors the assistant answer after the steps that produced it', async () => {
+    const scripter: MockScripter = () => [
+      {
+        type: 'update',
+        update: { type: 'tool_call', id: 'call-1', title: 'get_vm', kind: 'read', status: 'completed', output: 'ok' },
+      },
+      { type: 'update', update: { type: 'message_delta', text: 'Answer text.' } },
+      { type: 'final', text: 'Answer text.' },
+    ]
+    const { app, store } = appWithMockCopilot(scripter)
+
+    await request(app).post('/api/copilot/messages').send({ scope: 'vm:vm-orchid', message: 'check' }).expect(201)
+
+    const snapshot = store.snapshot()
+    const step = snapshot.toolCalls.find((item) => item.title === 'get_vm')
+    const answer = snapshot.messages.find((item) => item.content === 'Answer text.')
+    expect(step).toBeDefined()
+    expect(answer?.createdAt).toBeGreaterThanOrEqual(step!.createdAt)
+  })
+
+  it('keeps agent tool calls distinct across turns even when the driver reuses ids', async () => {
+    // The print driver spawns a fresh kimi per turn, so its tool-call ids restart; the same
+    // 'call-1' must not collapse turn 2's step onto turn 1's card.
+    const scripter: MockScripter = () => [
+      { type: 'update', update: { type: 'tool_call', id: 'call-1', title: 'cat_file', kind: 'read', status: 'completed', output: 'data' } },
+      { type: 'update', update: { type: 'message_delta', text: 'Done.' } },
+      { type: 'final', text: 'Done.' },
+    ]
+    const { app, store } = appWithMockCopilot(scripter)
+
+    await request(app).post('/api/copilot/messages').send({ scope: 'vm:vm-orchid', message: 'first' }).expect(201)
+    await request(app).post('/api/copilot/messages').send({ scope: 'vm:vm-orchid', message: 'second' }).expect(201)
+
+    const agentSteps = store.snapshot().toolCalls.filter((item) => item.title === 'cat_file')
+    expect(agentSteps).toHaveLength(2)
+    expect(new Set(agentSteps.map((item) => item.id)).size).toBe(2)
+  })
+
+  it('assigns strictly increasing timeline stamps within a turn', async () => {
+    const scripter: MockScripter = () => [
+      { type: 'update', update: { type: 'tool_call', id: 'call-1', title: 'cat_file', kind: 'read', status: 'completed', output: 'a' } },
+      { type: 'update', update: { type: 'tool_call', id: 'call-2', title: 'cat_file', kind: 'read', status: 'completed', output: 'b' } },
+      { type: 'update', update: { type: 'message_delta', text: 'Answer.' } },
+      { type: 'final', text: 'Answer.' },
+    ]
+    const { app, store } = appWithMockCopilot(scripter)
+
+    await request(app).post('/api/copilot/messages').send({ scope: 'vm:vm-orchid', message: 'go' }).expect(201)
+
+    const snapshot = store.snapshot()
+    const user = snapshot.messages.find((item) => item.content === 'go')
+    const steps = snapshot.toolCalls.filter((item) => item.title === 'cat_file')
+    const answer = snapshot.messages.find((item) => item.content === 'Answer.')
+    const stamps = [user!.createdAt!, ...steps.map((item) => item.createdAt), answer!.createdAt!]
+    // Every stamp is unique and strictly increasing in creation order.
+    expect(new Set(stamps).size).toBe(stamps.length)
+    expect(stamps).toEqual([...stamps].sort((a, b) => a - b))
+  })
+
+  it('answers a fleet-scoped chat request', async () => {
+    const { app } = appWithMockCopilot()
     const response = await request(app)
       .post('/api/copilot/messages')
-      .send({ vmId: 'vm-orchid', activeTab: 'overview', message: 'is there a shadowsocks server running' })
+      .send({ scope: 'fleet', message: 'which VMs need attention' })
       .expect(201)
 
-    expect(response.body.proposals).toHaveLength(0)
-    expect(response.body.messages[1].content).toContain('Kimi checked runtime status')
-    expect(response.body.messages[1].content).not.toContain('I am running locally with the full context')
+    expect(response.body.messages[1].scope).toBe('fleet')
+    expect(response.body.messages[1].content).toContain('which VMs need attention')
+  })
 
+  it('runs a read-only copilot command immediately and records activity', async () => {
+    const { store } = appWithMockCopilot()
+    const result = await store.runScopedCommand({
+      scope: 'vm:vm-orchid',
+      vmId: 'vm-orchid',
+      command: 'uptime',
+      reason: 'health check',
+    })
+
+    expect(result.ok).toBe(true)
     const vm = store.snapshot().vms.find((item) => item.id === 'vm-orchid')
-    expect(vm?.activity[0].title).toBe('Copilot SSH inspection')
-    expect(vm?.activity[0].detail).toBe('Shadowsocks diagnostic collected over SSH.')
+    expect(vm?.activity[0].title).toBe('Copilot inspection')
+    expect(store.snapshot().toolCalls.at(-1)?.status).toBe('completed')
   })
 
-  it('lets the configured copilot run a Shadowsocks installation diagnostic', async () => {
-    const { app, store } = appWithFakeCopilot(async (input) => {
-      const result = await input.runtime.inspectSystem('shadowsocks_installed')
-      return `Kimi checked installation evidence: ${result.summary}`
+  it('gates a mutating copilot command behind an awaiting-confirmation proposal', async () => {
+    const { store } = appWithMockCopilot()
+    const pending = store.runScopedCommand({
+      scope: 'vm:vm-orchid',
+      vmId: 'vm-orchid',
+      command: 'sudo systemctl restart nginx',
+      reason: 'restart web',
     })
-    const response = await request(app)
-      .post('/api/copilot/messages')
-      .send({ vmId: 'vm-orchid', activeTab: 'overview', message: 'is shadowsocks server installed on this machine' })
-      .expect(201)
 
-    expect(response.body.proposals).toHaveLength(0)
-    expect(response.body.messages[1].content).toContain('Kimi checked installation evidence')
-    expect(response.body.messages[1].content).not.toContain('server running')
+    const proposal = store.snapshot().proposals.find((item) => item.status === 'awaiting_confirmation')
+    expect(proposal).toBeDefined()
+    expect(proposal?.command).toBe('sudo systemctl restart nginx')
 
-    const vm = store.snapshot().vms.find((item) => item.id === 'vm-orchid')
-    expect(vm?.activity[0].detail).toBe('Shadowsocks installation diagnostic collected over SSH.')
+    await store.decideProposal(proposal!.id, 'allow_once')
+    const result = await pending
+    expect(result.ok).toBe(true)
+    expect(store.snapshot().proposals.find((item) => item.id === proposal!.id)?.status).toBe('executed')
   })
 
-  it('publishes copilot progress events while the configured agent works', async () => {
-    const { app, store } = appWithFakeCopilot((input) => {
-      input.onProgress?.({ title: 'Kimi is choosing tools', detail: 'test step', status: 'running' })
-      input.onProgress?.({ title: 'Kimi finished', status: 'completed' })
-      return 'Kimi finished the request.'
+  it('refuses a mutating copilot command when the user denies it', async () => {
+    const { store } = appWithMockCopilot()
+    const pending = store.runScopedCommand({
+      scope: 'vm:vm-orchid',
+      vmId: 'vm-orchid',
+      command: 'sudo rm -rf /tmp/cache',
+      reason: 'cleanup',
     })
+
+    const proposal = store.snapshot().proposals.find((item) => item.status === 'awaiting_confirmation')
+    expect(proposal).toBeDefined()
+
+    await store.decideProposal(proposal!.id, 'deny')
+    const result = await pending
+    expect(result.ok).toBe(false)
+    expect(store.snapshot().proposals.find((item) => item.id === proposal!.id)?.status).toBe('dismissed')
+  })
+
+  it('surfaces parallel gated commands one confirmation at a time, in arrival order', async () => {
+    const { store } = appWithMockCopilot()
+    const first = store.runScopedCommand({
+      scope: 'vm:vm-orchid',
+      vmId: 'vm-orchid',
+      command: 'sudo systemctl restart nginx',
+      reason: 'restart web',
+    })
+    const second = store.runScopedCommand({
+      scope: 'vm:vm-orchid',
+      vmId: 'vm-orchid',
+      command: 'sudo rm -rf /tmp/cache',
+      reason: 'cleanup',
+    })
+
+    let awaiting = store.snapshot().proposals.filter((item) => item.status === 'awaiting_confirmation')
+    expect(awaiting).toHaveLength(1)
+    expect(awaiting[0].command).toBe('sudo systemctl restart nginx')
+
+    await store.decideProposal(awaiting[0].id, 'allow_once')
+    const firstResult = await first
+
+    awaiting = store.snapshot().proposals.filter((item) => item.status === 'awaiting_confirmation')
+    expect(awaiting).toHaveLength(1)
+    expect(awaiting[0].command).toBe('sudo rm -rf /tmp/cache')
+
+    await store.decideProposal(awaiting[0].id, 'deny')
+    const secondResult = await second
+    expect(firstResult.ok).toBe(true)
+    expect(secondResult.ok).toBe(false)
+  })
+
+  it('skips the queued confirmation when always-allow already covers the same command', async () => {
+    const { store } = appWithMockCopilot()
+    const first = store.runScopedCommand({
+      scope: 'vm:vm-orchid',
+      vmId: 'vm-orchid',
+      command: 'sudo systemctl restart nginx',
+      reason: 'restart web',
+    })
+    const second = store.runScopedCommand({
+      scope: 'vm:vm-orchid',
+      vmId: 'vm-orchid',
+      command: 'sudo systemctl restart nginx',
+      reason: 'restart web again',
+    })
+
+    const awaiting = store.snapshot().proposals.filter((item) => item.status === 'awaiting_confirmation')
+    expect(awaiting).toHaveLength(1)
+
+    await store.decideProposal(awaiting[0].id, 'always_allow')
+    const results = await Promise.all([first, second])
+    expect(results[0].ok).toBe(true)
+    expect(results[1].ok).toBe(true)
+    // The second command never surfaced its own card.
+    const restartProposals = store
+      .snapshot()
+      .proposals.filter((item) => item.command === 'sudo systemctl restart nginx')
+    expect(restartProposals).toHaveLength(1)
+  })
+
+  it('fans fleet commands out in parallel with bounded concurrency and stable result order', async () => {
+    class GatedFleetSsh implements SshSessionManager {
+      inFlight = 0
+      maxInFlight = 0
+
+      async executeCommand({ vm, command, actor, mutating }: CommandExecutionRequest): Promise<CommandRun> {
+        this.inFlight += 1
+        this.maxInFlight = Math.max(this.maxInFlight, this.inFlight)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        this.inFlight -= 1
+        return {
+          id: `run-${vm.id}`,
+          vmId: vm.id,
+          actor,
+          command,
+          status: 'completed',
+          startedAt: '00:00',
+          completedAt: '00:00',
+          stdout: `ok ${vm.name}`,
+          stderr: '',
+          exitCode: 0,
+          summary: `ok ${vm.name}`,
+          mutating,
+        }
+      }
+
+      async openTerminal(vm: VM): Promise<TerminalSession> {
+        return { id: `term-${vm.id}`, vmId: vm.id, status: 'open', createdAt: '00:00', lastActivityAt: '00:00' }
+      }
+
+      async listFiles(): Promise<FileNode[]> {
+        return []
+      }
+    }
+
+    process.env.GROVE_FLEET_CONCURRENCY = '2'
+    try {
+      const ssh = new GatedFleetSsh()
+      const store = new GroveStore(ssh, { driver: new MockDriver() })
+      const vms = store.snapshot().vms
+      expect(vms.length).toBeGreaterThan(2)
+
+      const pending = store.fleetRunCommand({
+        scope: 'fleet',
+        command: 'sudo apt-get -y upgrade',
+        reason: 'patch everything',
+        targetVmIds: vms.map((vm) => vm.id),
+      })
+      const proposal = store.snapshot().proposals.find((item) => item.status === 'awaiting_confirmation')
+      expect(proposal).toBeDefined()
+      await store.decideProposal(proposal!.id, 'allow_once')
+
+      const result = await pending
+      expect(result.ok).toBe(true)
+      expect(ssh.maxInFlight).toBe(2)
+      const lines = result.data as string[]
+      expect(lines).toHaveLength(vms.length)
+      vms.forEach((vm, index) => {
+        expect(lines[index]).toContain(vm.name)
+      })
+    } finally {
+      delete process.env.GROVE_FLEET_CONCURRENCY
+    }
+  })
+
+  it('releases an awaiting confirmation when the scope turn is cancelled', async () => {
+    const { store } = appWithMockCopilot()
+    const pending = store.runScopedCommand({
+      scope: 'vm:vm-orchid',
+      vmId: 'vm-orchid',
+      command: 'sudo systemctl restart nginx',
+      reason: 'restart web',
+    })
+
+    const proposal = store.snapshot().proposals.find((item) => item.status === 'awaiting_confirmation')
+    expect(proposal).toBeDefined()
+
+    store.cancelCopilot('vm:vm-orchid')
+    const result = await pending
+    expect(result.ok).toBe(false)
+    const after = store.snapshot().proposals.find((item) => item.id === proposal!.id)
+    expect(after?.status).toBe('dismissed')
+    expect(after?.result).toBe('Cancelled.')
+  })
+
+  it('publishes queued and ready progress events during a turn', async () => {
+    const { app, store } = appWithMockCopilot()
     const progressTitles: string[] = []
     const unsubscribe = store.onEvent((event) => {
       if (event.type === 'copilot.progress') {
@@ -643,15 +981,100 @@ vms:
       }
     })
 
-    await request(app)
-      .post('/api/copilot/messages')
-      .send({ vmId: 'vm-orchid', activeTab: 'overview', message: 'check something slowly' })
-      .expect(201)
+    await request(app).post('/api/copilot/messages').send({ scope: 'vm:vm-orchid', message: 'check' }).expect(201)
     unsubscribe()
 
     expect(progressTitles).toContain('Queued copilot request')
-    expect(progressTitles).toContain('Kimi is choosing tools')
-    expect(progressTitles).toContain('Kimi finished')
     expect(progressTitles).toContain('Copilot response ready')
+  })
+
+  it('cancels an in-flight copilot run for a scope', async () => {
+    const { app } = appWithMockCopilot()
+    const response = await request(app).post('/api/copilot/cancel').send({ scope: 'fleet' }).expect(200)
+    expect(response.body.scope).toBe('fleet')
+  })
+
+  it('exposes scoped MCP tools through the scope token', async () => {
+    const store = new GroveStore(undefined, { driver: new MockDriver() })
+    const { app } = createGroveApp(store)
+    const token = store.scopeTokens.tokenForScope('vm:vm-orchid')
+
+    const tools = await request(app).get('/api/mcp/tools').set('x-grove-scope', token).expect(200)
+    const names = tools.body.tools.map((tool: { name: string }) => tool.name)
+    expect(names).toContain('run_command')
+    expect(names).toContain('inspect_vm')
+    expect(names).toContain('diagnose_service')
+    expect(names).not.toContain('fleet_run_command')
+
+    const call = await request(app)
+      .post('/api/mcp/call')
+      .set('x-grove-scope', token)
+      .send({ name: 'get_vm', arguments: {} })
+      .expect(200)
+    expect(call.body.result.ok).toBe(true)
+
+    await request(app).get('/api/mcp/tools').expect(401)
+  })
+
+  it('limits fleet-only MCP tools to the fleet scope', async () => {
+    const store = new GroveStore(undefined, { driver: new MockDriver() })
+    const { app } = createGroveApp(store)
+    const token = store.scopeTokens.tokenForScope('fleet')
+
+    const tools = await request(app).get('/api/mcp/tools').set('x-grove-scope', token).expect(200)
+    const names = tools.body.tools.map((tool: { name: string }) => tool.name)
+    expect(names).toContain('fleet_run_command')
+    expect(names).toContain('list_vms')
+    expect(names).toContain('inspect_vm')
+    expect(names).not.toContain('run_command')
+    expect(names).not.toContain('diagnose_service')
+
+    const inspectTool = tools.body.tools.find((tool: { name: string }) => tool.name === 'inspect_vm')
+    expect(inspectTool.inputSchema.required).toContain('vmId')
+  })
+
+  it('inspects a VM with one composite SSH round-trip', async () => {
+    const { store } = appWithMockCopilot()
+    const result = await store.inspectVm({ scope: 'vm:vm-orchid', vmId: 'vm-orchid' })
+
+    expect(result.ok).toBe(true)
+    expect(result.summary).toContain('orchid-build-01')
+    const data = result.data as { services: unknown[]; processes: unknown[]; metrics: { memoryPercent: number } }
+    expect(data.services.length).toBeGreaterThan(0)
+    expect(data.processes.length).toBeGreaterThan(0)
+    expect(data.metrics.memoryPercent).toBeGreaterThan(0)
+    const toolCall = store.snapshot().toolCalls.at(-1)
+    expect(toolCall?.title).toBe('inspect_vm')
+    expect(toolCall?.status).toBe('completed')
+
+    const missing = await store.inspectVm({ scope: 'vm:vm-orchid', vmId: 'vm-nope' })
+    expect(missing.ok).toBe(false)
+  })
+
+  it('diagnoses a service with one composite SSH round-trip', async () => {
+    const { store } = appWithMockCopilot()
+    const result = await store.diagnoseService({ scope: 'vm:vm-orchid', vmId: 'vm-orchid', unit: 'docker', lines: 50 })
+
+    expect(result.ok).toBe(true)
+    expect(result.summary).toContain('docker')
+    const data = result.data as { status: string; logs: string; ports: string }
+    expect(data.status).toContain('docker')
+    expect(data.logs).toContain('started')
+    const toolCall = store.snapshot().toolCalls.at(-1)
+    expect(toolCall?.title).toBe('diagnose_service')
+    expect(toolCall?.status).toBe('completed')
+  })
+
+  it('requires the UI token for mutating routes when configured', async () => {
+    const store = new GroveStore(undefined, { driver: new MockDriver() })
+    const { app } = createGroveApp(store, { uiToken: 'boot-secret' })
+
+    await request(app).post('/api/copilot/messages').send({ scope: 'fleet', message: 'hi' }).expect(401)
+    await request(app)
+      .post('/api/copilot/messages')
+      .set('x-grove-token', 'boot-secret')
+      .send({ scope: 'fleet', message: 'hi' })
+      .expect(201)
+    await request(app).get('/api/snapshot').expect(200)
   })
 })

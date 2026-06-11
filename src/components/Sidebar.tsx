@@ -1,13 +1,16 @@
-import { PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react'
+import { Layers, LoaderCircle, PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react'
 import { useState } from 'react'
 import { cx } from '../lib/format'
-import type { VM } from '../types'
+import type { CopilotScope, VM } from '../types'
+import { vmScope } from '../types'
 import { IconButton } from './IconButton'
 
 interface SidebarProps {
   vms: VM[]
-  selectedVmId?: string
-  onSelect: (vmId: string) => void
+  activeScope: CopilotScope
+  onSelectScope: (scope: CopilotScope) => void
+  busyScopes: Set<string>
+  attentionScopes: Set<string>
   onAddVm: () => void
 }
 
@@ -38,8 +41,29 @@ function vmInitials(name: string) {
   return initials || name.slice(0, 2).toUpperCase()
 }
 
-export function Sidebar({ vms, selectedVmId, onSelect, onAddVm }: SidebarProps) {
+const healthDot: Record<VM['health'], string> = {
+  healthy: 'bg-emerald-500',
+  warning: 'bg-amber-500',
+  critical: 'bg-rose-500',
+  offline: 'bg-slate-300',
+}
+
+function Markers({ busy, attention }: { busy: boolean; attention: boolean }) {
+  return (
+    <span className="ml-auto flex items-center gap-1.5">
+      {attention ? (
+        <span className="h-2 w-2 rounded-full bg-amber-500" title="Waiting for your confirmation" aria-hidden="true" />
+      ) : null}
+      {busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin text-slate-400" aria-hidden="true" /> : null}
+    </span>
+  )
+}
+
+export function Sidebar({ vms, activeScope, onSelectScope, busyScopes, attentionScopes, onAddVm }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false)
+  const running = vms.filter((vm) => vm.lifecycle === 'running').length
+  const warning = vms.filter((vm) => vm.health === 'warning' || vm.health === 'critical').length
+  const fleetActive = activeScope === 'fleet'
 
   return (
     <aside
@@ -74,6 +98,30 @@ export function Sidebar({ vms, selectedVmId, onSelect, onAddVm }: SidebarProps) 
       </div>
 
       <div className={cx('min-h-0 flex-1 overflow-auto px-2 py-3', isCollapsed && 'lg:px-1')}>
+        <button
+          type="button"
+          aria-label="All VMs"
+          aria-pressed={fleetActive}
+          title="All VMs"
+          onClick={() => onSelectScope('fleet')}
+          className={cx(
+            'mb-2 flex w-full items-center gap-2 rounded border p-3 text-left transition',
+            isCollapsed && 'lg:h-10 lg:justify-center lg:p-0',
+            fleetActive ? 'border-slate-300 bg-slate-50' : 'border-transparent hover:border-slate-200 hover:bg-slate-50',
+          )}
+        >
+          <Layers className="h-4 w-4 shrink-0 text-slate-600" aria-hidden="true" />
+          <div className={cx('min-w-0 flex-1', isCollapsed && 'lg:hidden')}>
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm font-semibold text-slate-900">All VMs</span>
+              <Markers busy={busyScopes.has('fleet')} attention={attentionScopes.has('fleet')} />
+            </div>
+            <div className="truncate text-xs text-slate-500">
+              {running} running{warning ? ` · ${warning} need attention` : ''}
+            </div>
+          </div>
+        </button>
+
         <div className={cx('mb-2 flex items-center justify-between gap-2 px-2', isCollapsed && 'lg:justify-center lg:px-0')}>
           <div className={cx('text-[11px] font-medium uppercase text-slate-500', isCollapsed && 'lg:hidden')}>
             Inventory {vms.length}
@@ -92,32 +140,37 @@ export function Sidebar({ vms, selectedVmId, onSelect, onAddVm }: SidebarProps) 
           </button>
         </div>
         <div id="vm-inventory-list" className="space-y-1">
-          {vms.map((vm) => (
-            <button
-              key={vm.id}
-              type="button"
-              aria-label={`Select ${vm.name}`}
-              title={vm.name}
-              onClick={() => onSelect(vm.id)}
-              className={cx(
-                'w-full rounded border p-3 text-left transition',
-                isCollapsed && 'lg:flex lg:h-10 lg:items-center lg:justify-center lg:p-0',
-                selectedVmId === vm.id
-                  ? 'border-slate-300 bg-slate-50'
-                  : 'border-transparent hover:border-slate-200 hover:bg-slate-50',
-              )}
-            >
-              <span className={cx('hidden text-xs font-semibold text-slate-700', isCollapsed && 'lg:inline')}>
-                {vmInitials(vm.name)}
-              </span>
-              <div className={cx(isCollapsed && 'lg:hidden')}>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="truncate text-sm font-semibold text-slate-900">{vm.name}</span>
+          {vms.map((vm) => {
+            const scope = vmScope(vm.id)
+            const isActive = activeScope === scope
+            return (
+              <button
+                key={vm.id}
+                type="button"
+                aria-label={`Select ${vm.name}`}
+                aria-pressed={isActive}
+                title={vm.name}
+                onClick={() => onSelectScope(scope)}
+                className={cx(
+                  'w-full rounded border p-3 text-left transition',
+                  isCollapsed && 'lg:flex lg:h-10 lg:items-center lg:justify-center lg:p-0',
+                  isActive ? 'border-slate-300 bg-slate-50' : 'border-transparent hover:border-slate-200 hover:bg-slate-50',
+                )}
+              >
+                <span className={cx('hidden text-xs font-semibold text-slate-700', isCollapsed && 'lg:inline')}>
+                  {vmInitials(vm.name)}
+                </span>
+                <div className={cx(isCollapsed && 'lg:hidden')}>
+                  <div className="mb-2 flex items-center gap-2">
+                    <span className={cx('h-2 w-2 shrink-0 rounded-full', healthDot[vm.health])} aria-hidden="true" />
+                    <span className="truncate text-sm font-semibold text-slate-900">{vm.name}</span>
+                    <Markers busy={busyScopes.has(scope)} attention={attentionScopes.has(scope)} />
+                  </div>
+                  <div className="truncate text-xs text-slate-500">{vm.ipAddress}</div>
                 </div>
-                <div className="truncate text-xs text-slate-500">{vm.ipAddress}</div>
-              </div>
-            </button>
-          ))}
+              </button>
+            )
+          })}
         </div>
       </div>
     </aside>
