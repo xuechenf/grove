@@ -7,6 +7,7 @@ import {
   Send,
   ShieldQuestion,
   Square,
+  TerminalSquare,
 } from 'lucide-react'
 import {
   useEffect,
@@ -75,6 +76,8 @@ function inlineDetail(detail: string | undefined, max = 96) {
  */
 function ToolStep({ toolCall }: { toolCall: CopilotToolCall }) {
   const [expanded, setExpanded] = useState(false)
+  const [showLog, setShowLog] = useState(false)
+  const consoleLog = toolCall.consoleLog?.trim()
   const outputLines = useMemo(
     () => (toolCall.output ? toolCall.output.replace(/\r\n/g, '\n').split('\n') : []),
     [toolCall.output],
@@ -114,6 +117,32 @@ function ToolStep({ toolCall }: { toolCall: CopilotToolCall }) {
               >
                 {expanded ? 'collapse' : `… +${hiddenLines} lines`}
               </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {consoleLog ? (
+        <div className="mt-0.5 flex gap-2 pl-1">
+          <span className="select-none text-transparent" aria-hidden="true">
+            ⎿
+          </span>
+          <div className="min-w-0 flex-1">
+            <button
+              type="button"
+              onClick={() => setShowLog((current) => !current)}
+              aria-expanded={showLog}
+              className="inline-flex items-center gap-1 text-slate-400 underline decoration-dotted underline-offset-2 hover:text-slate-600"
+            >
+              <TerminalSquare className="h-3 w-3" aria-hidden="true" />
+              {showLog ? 'hide console log' : 'console log'}
+            </button>
+            {showLog ? (
+              <pre
+                data-testid="tool-console-log"
+                className="mt-1 max-h-72 overflow-auto rounded border border-slate-800 bg-slate-950 px-2.5 py-2 text-[11px] leading-relaxed text-slate-100"
+              >
+                {consoleLog}
+              </pre>
             ) : null}
           </div>
         </div>

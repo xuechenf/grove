@@ -900,7 +900,11 @@ vms:
     expect(result.ok).toBe(true)
     const vm = store.snapshot().vms.find((item) => item.id === 'vm-orchid')
     expect(vm?.activity[0].title).toBe('Copilot inspection')
-    expect(store.snapshot().toolCalls.at(-1)?.status).toBe('completed')
+    const toolCall = store.snapshot().toolCalls.at(-1)
+    expect(toolCall?.status).toBe('completed')
+    // The step carries the full SSH console dump for the on-demand "console log" view.
+    expect(toolCall?.consoleLog).toContain('$ uptime')
+    expect(toolCall?.consoleLog).toContain('[exit 0]')
   })
 
   it('gates a mutating copilot command behind an awaiting-confirmation proposal', async () => {

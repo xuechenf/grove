@@ -282,6 +282,12 @@ export interface CopilotToolCall {
   detail?: string
   /** Truncated tool output for the timeline card. */
   output?: string
+  /**
+   * Full SSH console dump for steps that ran a command (the command line, raw stdout/stderr,
+   * and exit status), shown on demand behind the step's "console log" toggle. Bounded but much
+   * larger than `output`, which stays a compact preview.
+   */
+  consoleLog?: string
   createdAt: number
   updatedAt: number
 }

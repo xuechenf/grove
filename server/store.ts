@@ -690,6 +690,28 @@ function commandOutput(run: CommandRun) {
   return run.stdout?.trim() || run.stderr?.trim() || run.summary
 }
 
+/** A terminal-style transcript of one SSH command run for the step's "console log" view. */
+function commandConsoleDump(run: CommandRun): string {
+  const lines = [`$ ${run.command}`]
+  const stdout = (run.stdout ?? '').replace(/\r\n/g, '\n').replace(/\s+$/, '')
+  if (stdout) {
+    lines.push(stdout)
+  }
+  const stderr = (run.stderr ?? '').replace(/\r\n/g, '\n').replace(/\s+$/, '')
+  if (stderr) {
+    lines.push('--- stderr ---', stderr)
+  }
+  const exit = run.exitCode ?? (run.status === 'completed' ? 0 : 1)
+  lines.push(`[exit ${exit}]`)
+  // Generous bound — this is the detailed view — but still capped for journal/snapshot size.
+  return clipBlock(lines.join('\n'), 20000, 500)
+}
+
+/** One transcript per VM for a fleet command, each labelled with the VM name. */
+function fleetConsoleDump(runs: CommandRun[], vms: VM[]): string {
+  return runs.map((run, index) => `# ${vms[index]?.name ?? run.vmId}\n${commandConsoleDump(run)}`).join('\n\n')
+}
+
 function toolResultFromRun(run: CommandRun, reason: string): ToolResult {
   return {
     ok: run.status === 'completed',
@@ -1055,7 +1077,12 @@ export class GroveStore implements CopilotToolHost {
     return { serviceName }
   }
 
-  async refreshVmInfo(vmId: string) {
+  async refreshVmInfo(vmId: string): Promise<VM> {
+    return (await this.sampleVmInfo(vmId)).vm
+  }
+
+  /** Like refreshVmInfo, but also returns the raw command run so callers can keep its console dump. */
+  private async sampleVmInfo(vmId: string): Promise<{ vm: VM; run: CommandRun }> {
     const vm = this.requireVm(vmId)
     const command = refreshVmCommand()
     const run = await this.ssh.executeCommand({
@@ -1077,7 +1104,7 @@ export class GroveStore implements CopilotToolHost {
         },
       }
       this.replaceVm(failedVm)
-      return failedVm
+      return { vm: failedVm, run }
     }
 
     const { values, processes, services } = parseRuntimeSections(run.stdout ?? '')
@@ -1150,7 +1177,7 @@ export class GroveStore implements CopilotToolHost {
       },
     }
     this.replaceVm(updatedVm)
-    return updatedVm
+    return { vm: updatedVm, run }
   }
 
   async runTerminalCommand(vmId: string, command: string) {
@@ -1412,7 +1439,7 @@ export class GroveStore implements CopilotToolHost {
     if (isReadOnlyCommand(input.command)) {
       const run = await this.ssh.executeCommand({ vm, command: input.command, actor: 'copilot', mutating: false })
       this.recordCommandActivity(vm.id, 'Copilot inspection', run)
-      this.finishToolCall(toolCall, run.status === 'completed' ? 'completed' : 'failed', commandOutput(run))
+      this.finishToolCall(toolCall, run.status === 'completed' ? 'completed' : 'failed', commandOutput(run), commandConsoleDump(run))
       return toolResultFromRun(run, input.reason)
     }
 
@@ -1519,15 +1546,15 @@ export class GroveStore implements CopilotToolHost {
     }
 
     const toolCall = this.startToolCall(input.scope, 'inspect_vm', 'read', existing.id, 'Live metrics, services, and processes (one SSH round-trip)')
-    const vm = await this.refreshVmInfo(existing.id)
+    const { vm, run } = await this.sampleVmInfo(existing.id)
     if (vm.connection.testStatus === 'failed') {
-      this.finishToolCall(toolCall, 'failed', 'SSH inspection failed; the VM is unreachable.')
+      this.finishToolCall(toolCall, 'failed', 'SSH inspection failed; the VM is unreachable.', commandConsoleDump(run))
       return { ok: false, summary: `${vm.name} is unreachable over SSH.`, error: 'SSH inspection failed.' }
     }
 
     const degraded = vm.services.filter((service) => service.state !== 'running').length
     const summary = `${vm.name}: load ${vm.metrics.loadAverage[0]}, mem ${vm.metrics.memoryPercent}%, disk ${vm.metrics.diskPercent}%, ${vm.services.length} services (${degraded} not running).`
-    this.finishToolCall(toolCall, 'completed', summary)
+    this.finishToolCall(toolCall, 'completed', summary, commandConsoleDump(run))
     return {
       ok: true,
       summary,
@@ -1560,7 +1587,7 @@ export class GroveStore implements CopilotToolHost {
     const run = await this.ssh.executeCommand({ vm, command: diagnoseServiceCommand(unit, lines), actor: 'copilot', mutating: false })
     if (run.status === 'failed') {
       this.recordCommandActivity(vm.id, 'Copilot inspection', run)
-      this.finishToolCall(toolCall, 'failed', commandOutput(run))
+      this.finishToolCall(toolCall, 'failed', commandOutput(run), commandConsoleDump(run))
       return { ok: false, summary: `Could not diagnose ${unit}: ${run.summary}`, error: run.stderr || run.summary }
     }
 
@@ -1574,7 +1601,7 @@ export class GroveStore implements CopilotToolHost {
 
     const summary = `${unit}: ${compactLine(statusLine, 160) || 'no status output'}; ${logLines} log line${logLines === 1 ? '' : 's'}${ports ? '; listening sockets found' : ''}.`
     this.recordCommandActivity(vm.id, 'Copilot inspection', run)
-    this.finishToolCall(toolCall, 'completed', summary)
+    this.finishToolCall(toolCall, 'completed', summary, commandConsoleDump(run))
     return {
       ok: true,
       summary,
@@ -1676,7 +1703,7 @@ export class GroveStore implements CopilotToolHost {
     if (proposal) {
       this.updateProposal({ ...proposal, status: 'executed', result: [summary, ...results].join('\n') })
     }
-    this.finishToolCall(toolCall, completed ? 'completed' : 'failed', summary)
+    this.finishToolCall(toolCall, completed ? 'completed' : 'failed', summary, fleetConsoleDump(runs, targets))
     return { ok: completed > 0, summary, data: results }
   }
 
@@ -1860,12 +1887,18 @@ export class GroveStore implements CopilotToolHost {
     return toolCall
   }
 
-  private finishToolCall(toolCall: CopilotToolCall, status: CopilotToolCall['status'], output?: string) {
+  private finishToolCall(
+    toolCall: CopilotToolCall,
+    status: CopilotToolCall['status'],
+    output?: string,
+    consoleLog?: string,
+  ) {
     const updated: CopilotToolCall = {
       ...toolCall,
       status,
       // Line structure is preserved: the timeline renders output as a terminal block.
       output: output ? clipBlock(output) : toolCall.output,
+      consoleLog: consoleLog ?? toolCall.consoleLog,
       updatedAt: Date.now(),
     }
     this.toolCalls = this.toolCalls.map((item) => (item.id === toolCall.id ? updated : item))
@@ -1972,7 +2005,7 @@ export class GroveStore implements CopilotToolHost {
       () => this.publishCopilotProgress(input.scope, { title: `Queued behind work on ${input.vm.name}`, status: 'running' }),
     )
     this.recordCommandActivity(input.vm.id, 'Copilot action', run, input.proposalId)
-    this.finishToolCall(input.toolCall, run.status === 'completed' ? 'completed' : 'failed', commandOutput(run))
+    this.finishToolCall(input.toolCall, run.status === 'completed' ? 'completed' : 'failed', commandOutput(run), commandConsoleDump(run))
     if (input.proposalId) {
       const proposal = this.proposals.find((item) => item.id === input.proposalId)
       if (proposal) {

@@ -629,4 +629,49 @@ describe('Grove VM console', () => {
     await user.click(screen.getByRole('button', { name: 'Send copilot message' }))
     expect(onSendMessage).toHaveBeenLastCalledWith('checked ask', { referenceHistory: true })
   })
+
+  it('reveals the full SSH console dump behind a step\'s console-log toggle', async () => {
+    const user = userEvent.setup()
+    render(
+      <CopilotPanel
+        scope="vm:vm-orchid"
+        scopeLabel="orchid-build-01"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[]}
+        toolCalls={[
+          {
+            id: 'tc1',
+            scope: 'vm:vm-orchid',
+            title: 'run_command',
+            kind: 'execute',
+            status: 'completed',
+            vmId: 'vm-orchid',
+            detail: 'df -h /var',
+            output: '/dev/vda1 100G 42G 58G 42% /var',
+            consoleLog: '$ df -h /var\n/dev/vda1  100G  42G  58G  42% /var\n[exit 0]',
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ]}
+        plans={[]}
+        progress={[]}
+        proposals={[]}
+        isBusy={false}
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    // The dump is hidden until requested.
+    expect(screen.queryByTestId('tool-console-log')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /console log/i }))
+    const log = screen.getByTestId('tool-console-log')
+    expect(log).toHaveTextContent('$ df -h /var')
+    expect(log).toHaveTextContent('[exit 0]')
+
+    await user.click(screen.getByRole('button', { name: /hide console log/i }))
+    expect(screen.queryByTestId('tool-console-log')).not.toBeInTheDocument()
+  })
 })

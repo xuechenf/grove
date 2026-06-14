@@ -35,19 +35,38 @@ export function moonshotConfigFromEnv(): MoonshotConfig | undefined {
 
 export const GROVE_KIMI_MODEL_NAME = 'grove-kimi'
 
-/** Default per-turn context budget. Generous for bounded stateless turns, far below the model max. */
-export const DEFAULT_KIMI_MAX_CONTEXT = 32768
+export const DEFAULT_KIMI_MAX_CONTEXT = 131072
 const KIMI_MODEL_CONTEXT_LIMIT = 131072
+// kimi reserves ~50k tokens for response generation and auto-compacts when
+// `context_tokens + reserved_context_size >= max_context_size`. If max_context_size is at or
+// below that reserve, compaction fires on the very first step — kimi wipes its own history,
+// forgets the goal, and loops re-planning forever. So the window must stay comfortably above it.
+const KIMI_CONTEXT_FLOOR = 65536
 
 /**
- * Cap on how much context kimi sends per turn. With stateless turns the context is already
- * small; this is a safety net so one unusually large turn can't blow up to the 128K model max.
- * Override with GROVE_KIMI_MAX_CONTEXT; clamped to [4096, 131072].
+ * kimi's model context window. This is NOT the cost lever — runaway/long sessions are bounded by
+ * stateless turns (GROVE_KIMI_SESSION_TURNS) and a per-turn step cap (GROVE_KIMI_MAX_STEPS).
+ * Shrinking this below kimi's ~50k reserve causes constant auto-compaction and an inspect loop,
+ * so it defaults to the full model window. Override with GROVE_KIMI_MAX_CONTEXT; clamped to
+ * [65536, 131072] to stay above the reserve.
  */
 export function kimiMaxContextSize() {
   const raw = Math.trunc(Number(envValue('GROVE_KIMI_MAX_CONTEXT')))
   const value = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_KIMI_MAX_CONTEXT
-  return Math.min(KIMI_MODEL_CONTEXT_LIMIT, Math.max(4096, value))
+  return Math.min(KIMI_MODEL_CONTEXT_LIMIT, Math.max(KIMI_CONTEXT_FLOOR, value))
+}
+
+/**
+ * Hard cap on agent steps (tool calls) in one turn — the real guard against a runaway loop
+ * burning tokens. kimi's own default is 1000, far too high; a legitimate VM/fleet op needs only
+ * a handful. Override with GROVE_KIMI_MAX_STEPS; clamped to [1, 1000].
+ */
+export const DEFAULT_KIMI_MAX_STEPS = 100
+
+export function kimiMaxStepsPerTurn() {
+  const raw = Math.trunc(Number(envValue('GROVE_KIMI_MAX_STEPS')))
+  const value = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_KIMI_MAX_STEPS
+  return Math.min(1000, Math.max(1, value))
 }
 
 /**
@@ -97,6 +116,9 @@ export function ensureKimiConfigFile(): string | undefined {
     '',
     '[mcp.client]',
     `tool_call_timeout_ms = ${kimiToolCallTimeoutMs()}`,
+    '',
+    '[loop_control]',
+    `max_steps_per_turn = ${kimiMaxStepsPerTurn()}`,
     '',
   ].join('\n')
   writeFileSync(path, toml, 'utf8')
