@@ -54,6 +54,7 @@ const scopeSchema = z.custom<CopilotScope>(
 const copilotMessageSchema = z.object({
   scope: scopeSchema,
   message: z.string().min(1),
+  referenceHistory: z.boolean().optional(),
 })
 
 const copilotCancelSchema = z.object({

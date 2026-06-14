@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, relative, resolve, sep } from 'node:path'
 
 export interface LocalProjectFile {
@@ -9,8 +10,8 @@ export interface LocalProjectFile {
 const generatedFolders = new Set(['.git', 'node_modules', 'dist', 'build', '.cache', '.next', 'coverage'])
 
 function expandLocalPath(path: string) {
-  if (path.startsWith('~/')) {
-    return resolve(process.env.USERPROFILE ?? process.env.HOME ?? process.cwd(), path.slice(2))
+  if (path === '~' || path.startsWith('~/')) {
+    return resolve(homedir(), path.slice(1).replace(/^[\\/]/, ''))
   }
 
   return resolve(path)

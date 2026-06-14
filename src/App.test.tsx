@@ -1,6 +1,6 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { CopilotPanel } from './components/CopilotPanel'
 
@@ -473,5 +473,160 @@ describe('Grove VM console', () => {
     expect(link).toHaveAttribute('href', 'https://example.com/docs')
     expect(screen.getByText('bash')).toBeInTheDocument()
     expect(screen.getByText('df -h /var')).toBeInTheDocument()
+  })
+
+  it('renders OpenUI operator briefs inside assistant messages', async () => {
+    render(
+      <CopilotPanel
+        scope="fleet"
+        scopeLabel="All VMs"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[
+          {
+            id: 'm1',
+            role: 'assistant',
+            content: 'Fleet needs one follow-up.',
+            openUi: {
+              type: 'openui',
+              content:
+                'root = OperatorBrief("Fleet attention", "fleet", "warning", "One VM needs attention", [{ label: "Alerts", value: "1", detail: "orchid-build-01" }], [{ id: "vm-orchid", name: "orchid-build-01", health: "warning", lifecycle: "running", detail: "disk pressure" }])',
+            },
+            timestamp: '00:01',
+            scope: 'fleet',
+            createdAt: 1,
+          },
+        ]}
+        toolCalls={[]}
+        plans={[]}
+        progress={[]}
+        proposals={[]}
+        isBusy={false}
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    expect(screen.getByText('Fleet needs one follow-up.')).toBeInTheDocument()
+    expect(await screen.findByTestId('openui-operator-brief')).toBeInTheDocument()
+    expect(screen.getByText('Fleet attention')).toBeInTheDocument()
+    expect(screen.getByText('One VM needs attention')).toBeInTheDocument()
+    expect(screen.getAllByText('orchid-build-01').length).toBeGreaterThan(0)
+    expect(screen.getByText('disk pressure')).toBeInTheDocument()
+  })
+
+  it('keeps markdown fallback visible when OpenUI output is invalid', () => {
+    render(
+      <CopilotPanel
+        scope="fleet"
+        scopeLabel="All VMs"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[
+          {
+            id: 'm1',
+            role: 'assistant',
+            content: 'Fallback summary still renders.',
+            openUi: { type: 'openui', content: 'root = NotARealBrief("bad")' },
+            timestamp: '00:01',
+            scope: 'fleet',
+            createdAt: 1,
+          },
+        ]}
+        toolCalls={[]}
+        plans={[]}
+        progress={[]}
+        proposals={[]}
+        isBusy={false}
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    expect(screen.getByText('Fallback summary still renders.')).toBeInTheDocument()
+    expect(screen.getByTestId('openui-artifact')).toBeInTheDocument()
+  })
+
+  it('dispatches safe OpenUI actions to navigation and follow-up handlers', async () => {
+    const user = userEvent.setup()
+    const onOpenWorkspaceTarget = vi.fn()
+    const onSendMessage = vi.fn()
+    render(
+      <CopilotPanel
+        scope="fleet"
+        scopeLabel="All VMs"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[
+          {
+            id: 'm1',
+            role: 'assistant',
+            content: '',
+            openUi: {
+              type: 'openui',
+              content:
+                'root = OperatorBrief("Actions", null, null, null, null, null, null, null, null, null, [{ kind: "focus_vm", label: "Open orchid", vmId: "vm-orchid" }, { kind: "open_tab", label: "Open AppRunner", vmId: "vm-orchid", tab: "apprunner" }, { kind: "ask_followup", label: "Inspect logs", message: "Inspect nginx logs" }, { kind: "request_fix", label: "Fix disk", vmId: "vm-orchid", message: "Disk usage is high" }])',
+            },
+            timestamp: '00:01',
+            scope: 'fleet',
+            createdAt: 1,
+          },
+        ]}
+        toolCalls={[]}
+        plans={[]}
+        progress={[]}
+        proposals={[]}
+        isBusy={false}
+        onSendMessage={onSendMessage}
+        onOpenWorkspaceTarget={onOpenWorkspaceTarget}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+      />,
+    )
+
+    await user.click(await screen.findByRole('button', { name: 'Open orchid' }))
+    await user.click(screen.getByRole('button', { name: 'Open AppRunner' }))
+    await user.click(screen.getByRole('button', { name: 'Inspect logs' }))
+    await user.click(screen.getByRole('button', { name: 'Fix disk' }))
+
+    await waitFor(() => {
+      expect(onOpenWorkspaceTarget).toHaveBeenNthCalledWith(1, { vmId: 'vm-orchid' })
+      expect(onOpenWorkspaceTarget).toHaveBeenNthCalledWith(2, { vmId: 'vm-orchid', tab: 'apprunner' })
+      expect(onSendMessage).toHaveBeenNthCalledWith(1, 'Inspect nginx logs')
+      expect(onSendMessage).toHaveBeenNthCalledWith(
+        2,
+        'Propose a safe Grove-confirmed fix on vm-orchid: Disk usage is high',
+      )
+    })
+  })
+
+  it('passes the reference-history flag from the input checkbox', async () => {
+    const user = userEvent.setup()
+    const onSendMessage = vi.fn()
+    const props = {
+      scope: 'fleet' as const,
+      scopeLabel: 'All VMs',
+      runtime: { driver: 'mock' as const, state: 'ready' as const },
+      messages: [],
+      toolCalls: [],
+      plans: [],
+      progress: [],
+      proposals: [],
+      isBusy: false,
+      onDecideProposal: () => undefined,
+      onCancel: () => undefined,
+    }
+    render(<CopilotPanel {...props} onSendMessage={onSendMessage} />)
+
+    const checkbox = screen.getByRole('checkbox', { name: /reference history/i })
+    expect(checkbox).not.toBeChecked()
+
+    await user.type(screen.getByLabelText('Copilot message'), 'unchecked ask')
+    await user.click(screen.getByRole('button', { name: 'Send copilot message' }))
+    expect(onSendMessage).toHaveBeenLastCalledWith('unchecked ask', { referenceHistory: false })
+
+    await user.click(checkbox)
+    await user.type(screen.getByLabelText('Copilot message'), 'checked ask')
+    await user.click(screen.getByRole('button', { name: 'Send copilot message' }))
+    expect(onSendMessage).toHaveBeenLastCalledWith('checked ask', { referenceHistory: true })
   })
 })

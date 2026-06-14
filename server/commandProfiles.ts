@@ -74,8 +74,9 @@ const mutatingPatterns = [
   /\b(iptables|ufw|firewall-cmd)\s+/i,
   /\bsed\s+-i\b/i,
   /\btee\s+/i,
-  /(^|\s)>\s*[^&\s]/,
-  /(^|\s)>>\s*[^&\s]/,
+  // Any `>`/`>>` that writes to a target, including fd-prefixed (`2>file`) and
+  // space-less (`echo x>file`) forms. Excludes fd duplication (`2>&1`, `>&2`) via [^&\s].
+  />>?\s*[^&\s]/,
   /\bcurl\b.*\|\s*(sh|bash)\b/i,
   /\bwget\b.*\|\s*(sh|bash)\b/i,
 ]

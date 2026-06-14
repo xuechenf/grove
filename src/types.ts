@@ -245,6 +245,10 @@ export interface CopilotMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  openUi?: {
+    type: 'openui'
+    content: string
+  }
   timestamp: string
   scope?: CopilotScope
   /** Epoch ms for stable timeline ordering across messages, tool calls, and proposals. */

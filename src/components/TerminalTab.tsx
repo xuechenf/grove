@@ -84,7 +84,9 @@ function TerminalSessionView({ vm, pane, active, commandDispatch, onCommand }: T
   const terminalRef = useRef<XTerm | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
   const promptBufferRef = useRef('')
-  const lastDispatchRef = useRef(0)
+  // -1 (not 0) so the very first dispatch, which carries sequence 0, is not mistaken
+  // for one already handled and dropped.
+  const lastDispatchRef = useRef(-1)
   const onCommandRef = useRef(onCommand)
   const vmRef = useRef(vm)
   const [status, setStatus] = useState(apiDisabled() ? 'local mock' : 'connecting')

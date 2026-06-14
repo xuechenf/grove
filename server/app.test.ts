@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import request from 'supertest'
@@ -8,9 +8,11 @@ import { createGroveApp } from './app'
 import { defaultAppRunnerPath } from './appRunnerMetadata'
 import { collectLocalProjectFiles } from './localProjectFiles'
 import { GroveStore } from './store'
+import { CopilotJournal } from './copilotJournal'
 import { localEnvPath, saveMoonshotLocalEnv } from './env'
 import { resolveProjectStateReference } from './projectState'
 import { MockDriver, type MockScripter } from './drivers/mockDriver'
+import { OPENUI_OPERATOR_BRIEF_PROMPT } from '../src/openui/operatorBriefPrompt'
 import type { CommandRun, FileNode, TerminalSession, VM } from '../src/types'
 import type {
   CommandExecutionRequest,
@@ -220,6 +222,18 @@ vms:
     } finally {
       rmSync(tempDir, { recursive: true, force: true })
     }
+  })
+
+  it('lists a missing local folder as empty without creating it', async () => {
+    const { app } = createGroveApp()
+    const missing = join(tmpdir(), `grove-does-not-exist-${Date.now()}`)
+
+    const response = await request(app)
+      .get(`/api/local/files?path=${encodeURIComponent(missing)}`)
+      .expect(200)
+
+    expect(response.body).toEqual([])
+    expect(existsSync(missing)).toBe(false)
   })
 
   it('resolves relative SSH key paths from the project state directory', () => {
@@ -616,6 +630,58 @@ vms:
     expect(response.body.messages[1].scope).toBe('vm:vm-orchid')
   })
 
+  it('prepends referenced history to the model prompt only when requested', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grove-journal-'))
+    try {
+      const journal = new CopilotJournal(dir, true)
+      journal.recordMessage('fleet', {
+        id: 'h1',
+        role: 'user',
+        content: 'earlier question about disk',
+        timestamp: '00:00',
+        scope: 'fleet',
+        createdAt: 1,
+      })
+      journal.recordToolCall('fleet', {
+        id: 't1',
+        scope: 'fleet',
+        title: 'inspect_vm',
+        kind: 'read',
+        status: 'completed',
+        detail: 'orchid metrics',
+        createdAt: 2,
+        updatedAt: 2,
+      })
+
+      let captured = ''
+      const scripter: MockScripter = (promptRequest) => {
+        captured = promptRequest.message
+        return [{ type: 'final', text: 'ok' }]
+      }
+      const store = new GroveStore(undefined, { driver: new MockDriver(scripter), journal })
+      const { app } = createGroveApp(store)
+
+      const withHistory = await request(app)
+        .post('/api/copilot/messages')
+        .send({ scope: 'fleet', message: 'follow up please', referenceHistory: true })
+        .expect(201)
+      expect(captured).toContain('recent operation history')
+      expect(captured).toContain('earlier question about disk')
+      expect(captured).toContain('follow up please')
+      // The stored/displayed user message stays the original text, not the augmented prompt.
+      expect(withHistory.body.messages[0].content).toBe('follow up please')
+
+      captured = ''
+      await request(app)
+        .post('/api/copilot/messages')
+        .send({ scope: 'fleet', message: 'plain ask' })
+        .expect(201)
+      expect(captured).toBe('plain ask')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('surfaces agent execution steps, thinking, and plans as timeline state', async () => {
     const scripter: MockScripter = () => [
       { type: 'update', update: { type: 'thought', text: 'Need to look at the VM first.' } },
@@ -772,6 +838,54 @@ vms:
 
     expect(response.body.messages[1].scope).toBe('fleet')
     expect(response.body.messages[1].content).toContain('which VMs need attention')
+  })
+
+  it('extracts OpenUI operator briefs from final assistant messages', async () => {
+    const scripter: MockScripter = () => [
+      {
+        type: 'final',
+        text: [
+          'Fleet needs one follow-up.',
+          '',
+          '```openui',
+          'root = OperatorBrief("Fleet attention", "fleet", "warning", "One VM needs attention")',
+          '```',
+        ].join('\n'),
+      },
+    ]
+    const { app } = appWithMockCopilot(scripter)
+    const response = await request(app)
+      .post('/api/copilot/messages')
+      .send({ scope: 'fleet', message: 'fleet status' })
+      .expect(201)
+
+    expect(response.body.messages[1].content).toBe('Fleet needs one follow-up.')
+    expect(response.body.messages[1].openUi).toEqual({
+      type: 'openui',
+      content: 'root = OperatorBrief("Fleet attention", "fleet", "warning", "One VM needs attention")',
+    })
+  })
+
+  it('adds OpenUI operator brief guidance to generated scope workspaces', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'grove-openui-workspace-'))
+
+    try {
+      process.env.GROVE_STATE_DIR = tempDir
+      const store = new GroveStore(undefined, { driver: new MockDriver() })
+
+      await store.sendCopilotMessage({ scope: 'fleet', message: 'fleet status' })
+      await store.sendCopilotMessage({ scope: 'vm:vm-orchid', message: 'diagnose services' })
+
+      expect(readFileSync(join(store.copilotWorkspaceDir('fleet'), 'AGENTS.md'), 'utf8')).toContain(
+        OPENUI_OPERATOR_BRIEF_PROMPT,
+      )
+      expect(readFileSync(join(store.copilotWorkspaceDir('vm:vm-orchid'), 'AGENTS.md'), 'utf8')).toContain(
+        OPENUI_OPERATOR_BRIEF_PROMPT,
+      )
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+      delete process.env.GROVE_STATE_DIR
+    }
   })
 
   it('runs a read-only copilot command immediately and records activity', async () => {

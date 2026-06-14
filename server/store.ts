@@ -43,10 +43,14 @@ import { envFlag, envValue, saveMoonshotLocalEnv } from './env'
 import { loadInventory, saveInventory, vmFromConfig } from './inventory'
 import { ScopeTokenRegistry } from './mcp/endpoint'
 import { KeyedMutex } from './mutationLock'
+import { extractOpenUiArtifact } from './openUiArtifacts'
 import type { SshSessionManager } from './sshSessionManager'
 import { MockSshSessionManager, RealSshSessionManager } from './sshSessionManager'
 
 const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000
+
+/** Max journal entries injected when the user opts into "Reference history"; keeps the cost bounded. */
+const HISTORY_REFERENCE_LIMIT = 30
 
 interface PendingPermission {
   resolve: (decision: CopilotPermissionDecision) => void
@@ -802,6 +806,10 @@ export class GroveStore implements CopilotToolHost {
     return this.supervisor.status()
   }
 
+  copilotWorkspaceDir(scope: CopilotScope) {
+    return this.supervisor.workspaceDir(scope)
+  }
+
   configureCopilotProvider(input: MoonshotConfig) {
     saveMoonshotLocalEnv(input)
     return this.copilotProviderStatus()
@@ -1239,7 +1247,7 @@ export class GroveStore implements CopilotToolHost {
    * translate them into events + journal entries. Mutating work the agent attempts arrives
    * back through the MCP tool host methods below, which gate and execute it.
    */
-  async sendCopilotMessage(input: { scope: CopilotScope; message: string }) {
+  async sendCopilotMessage(input: { scope: CopilotScope; message: string; referenceHistory?: boolean }) {
     const scope = input.scope
     const vmId = scopeVmId(scope)
     if (vmId) {
@@ -1247,6 +1255,10 @@ export class GroveStore implements CopilotToolHost {
       // command doesn't pay the TCP+handshake cost serially.
       void this.ssh.warmConnection?.(this.requireVm(vmId))
     }
+
+    // Build the model-facing prompt before recording this turn, so referenced history reflects
+    // only earlier turns. The displayed/stored user message stays the original text.
+    const promptText = input.referenceHistory ? this.withReferencedHistory(scope, input.message) : input.message
 
     const userMessage: CopilotMessage = {
       id: id('msg-user'),
@@ -1276,7 +1288,7 @@ export class GroveStore implements CopilotToolHost {
 
     const turn: CopilotTurn = { scope, assistantId, text: '' }
     try {
-      const result = await this.supervisor.prompt(scope, input.message, (update) =>
+      const result = await this.supervisor.prompt(scope, promptText, (update) =>
         this.applyDriverUpdate(turn, update),
       )
       turn.text = result.text?.trim() ? result.text : turn.text
@@ -1287,9 +1299,11 @@ export class GroveStore implements CopilotToolHost {
     }
     this.closeThought(turn)
 
+    const extracted = extractOpenUiArtifact(turn.text || 'No response produced.')
     const finalAssistant: CopilotMessage = {
       ...assistant,
-      content: turn.text || 'No response produced.',
+      content: extracted.content,
+      openUi: extracted.openUi,
       createdAt: turn.textStartedAt ?? this.nextStamp(),
       streaming: false,
       timestamp: nowLabel(),
@@ -1300,6 +1314,28 @@ export class GroveStore implements CopilotToolHost {
     this.publishCopilotProgress(scope, { title: 'Copilot response ready', status: 'completed' })
 
     return { messages: [userMessage, finalAssistant], proposals: this.proposals.filter((proposal) => proposal.scope === scope) }
+  }
+
+  /**
+   * Prepend a bounded slice of this scope's recorded execution history to the model prompt, so a
+   * stateless turn can still reference earlier work when the user opts in. Same source as the
+   * get_history tool ({@link CopilotJournal.history}); returns the message unchanged when empty.
+   */
+  private withReferencedHistory(scope: CopilotScope, message: string): string {
+    const entries = this.journal.history(scope, { limit: HISTORY_REFERENCE_LIMIT })
+    if (!entries.length) {
+      return message
+    }
+    return [
+      'Reference — recent operation history for this scope (most recent first):',
+      entries.map((entry) => `- ${entry}`).join('\n'),
+      '',
+      'Use it for continuity; it may be stale, so verify with tools before acting.',
+      '',
+      '---',
+      '',
+      message,
+    ].join('\n')
   }
 
   cancelCopilot(scope: CopilotScope) {

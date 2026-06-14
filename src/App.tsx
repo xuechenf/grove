@@ -168,13 +168,23 @@ function parentRemotePath(path: string) {
 }
 
 function parentLocalPath(path: string) {
-  const normalized = path.replace(/\\$/, '')
-  const slashIndex = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'))
-  if (slashIndex <= 2) {
-    return normalized
+  const normalized = path.replace(/[\\/]+$/, '')
+  // Already at a filesystem root: "/" (POSIX) or "C:"/"C:\\" (Windows drive).
+  if (normalized === '' || /^[A-Za-z]:$/.test(normalized)) {
+    return path
   }
 
-  return normalized.slice(0, slashIndex)
+  const slashIndex = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'))
+  if (slashIndex < 0) {
+    return normalized
+  }
+  if (slashIndex === 0) {
+    return '/' // POSIX top-level dir like "/Users" -> root "/"
+  }
+
+  const parent = normalized.slice(0, slashIndex)
+  // Windows drive root: "C:\\Users" -> "C:\\", not the bare "C:".
+  return /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent
 }
 
 function joinLocalPath(directory: string, fileName: string, separator: string) {
@@ -1254,7 +1264,7 @@ function App() {
     )
   }
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, options?: { referenceHistory?: boolean }) {
     const scope = copilotScope
     setCopilotBusyByScope((current) => ({ ...current, [scope]: true }))
 
@@ -1262,7 +1272,7 @@ function App() {
       try {
         // The user and streamed assistant messages arrive over the events socket; the POST
         // resolves when the turn completes and is only a fallback for the final state.
-        const response = await sendCopilotMessage({ scope, message: content })
+        const response = await sendCopilotMessage({ scope, message: content, referenceHistory: options?.referenceHistory })
         setMessages((current) => response.messages.reduce((items, message) => appendOrReplaceById(items, message), current))
         setProposals((current) => response.proposals.reduce((items, proposal) => upsertById(items, proposal), current))
         return
@@ -1301,6 +1311,18 @@ function App() {
       }
     }
     setCopilotBusyByScope((current) => ({ ...current, [scope]: false }))
+  }
+
+  function openWorkspaceTarget(target: { vmId?: string; tab?: TabId }) {
+    const targetVmId = target.vmId ?? scopeVmId(copilotScope) ?? selectedVmId
+    if (targetVmId) {
+      selectScope(vmScope(targetVmId))
+      setIsWorkspaceCollapsed(false)
+    }
+    if (target.tab) {
+      setActiveTab(target.tab)
+      setIsWorkspaceCollapsed(false)
+    }
   }
 
   async function saveProvider(input: { apiKey: string; baseUrl: string; model: string }) {
@@ -1439,6 +1461,7 @@ function App() {
             proposals={scopeProposals}
             isBusy={scopeIsBusy}
             onSendMessage={sendMessage}
+            onOpenWorkspaceTarget={openWorkspaceTarget}
             onDecideProposal={decideProposal}
             onCancel={cancelCopilotRun}
           />

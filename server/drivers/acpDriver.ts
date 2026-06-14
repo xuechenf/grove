@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { CopilotRuntimeStatus, CopilotScope, CopilotToolCallKind, CopilotToolCallStatus } from '../../src/types'
 import { AcpConnection } from '../acpClient'
 import type { CopilotDriver, DriverUpdate, PromptRequest, PromptResult } from '../copilotTypes'
+import { formatKimiLaunchError, kimiBinaryFromEnv, kimiSpawnEnv } from './kimiBinary'
 
 export interface AcpDriverOptions {
   binary?: string
@@ -35,7 +36,7 @@ export class AcpDriver implements CopilotDriver {
   private detail = 'Starting kimi ACP server.'
 
   constructor(options: AcpDriverOptions = {}) {
-    this.binary = options.binary ?? process.env.GROVE_KIMI_BIN ?? 'kimi'
+    this.binary = options.binary ?? kimiBinaryFromEnv()
     this.model = options.model
   }
 
@@ -53,7 +54,7 @@ export class AcpDriver implements CopilotDriver {
 
     this.initializing = (async () => {
       this.state = 'starting'
-      const child = spawn(this.binary, ['acp'], { env: process.env })
+      const child = spawn(this.binary, ['acp'], { env: kimiSpawnEnv() })
       this.child = child
       const connection = new AcpConnection(child)
       this.connection = connection
@@ -62,7 +63,17 @@ export class AcpDriver implements CopilotDriver {
 
       connection.onNotification((method, params) => this.onNotification(method, params))
       connection.onRequest((method, params) => this.onRequest(method, params))
+      let launchFailed = false
+      child.on('error', (error) => {
+        launchFailed = true
+        this.state = 'error'
+        this.detail = formatKimiLaunchError(error, this.binary)
+        this.connection = undefined
+      })
       child.on('exit', () => {
+        if (launchFailed) {
+          return
+        }
         this.state = 'error'
         this.detail = 'kimi ACP server exited.'
         this.connection = undefined
@@ -77,8 +88,8 @@ export class AcpDriver implements CopilotDriver {
         this.detail = 'kimi ACP server ready.'
       } catch (error) {
         this.state = 'error'
-        this.detail = error instanceof Error ? error.message : 'ACP initialize failed.'
-        throw error
+        this.detail = formatKimiLaunchError(error, this.binary)
+        throw new Error(this.detail, { cause: error })
       }
     })()
 
@@ -154,7 +165,8 @@ export class AcpDriver implements CopilotDriver {
   }
 
   status(): CopilotRuntimeStatus {
-    return { driver: 'acp', state: this.state, detail: this.detail, model: this.model }
+    const detail = this.state === 'ready' ? `${this.detail} Binary: ${this.binary}` : this.detail
+    return { driver: 'acp', state: this.state, detail, model: this.model }
   }
 
   private onNotification(method: string, params: unknown) {

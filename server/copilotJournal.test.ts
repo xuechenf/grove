@@ -22,7 +22,10 @@ function message(id: string, partial: Partial<CopilotMessage> = {}): CopilotMess
 describe('CopilotJournal', () => {
   it('hydrates messages, tool calls, and proposals across instances', () => {
     const journal = new CopilotJournal(dir)
-    journal.recordMessage('vm:vm-a', message('m1', { content: 'first' }))
+    journal.recordMessage('vm:vm-a', message('m1', {
+      content: 'first',
+      openUi: { type: 'openui', content: 'root = OperatorBrief("Fleet")' },
+    }))
     const toolCall: CopilotToolCall = {
       id: 't1',
       scope: 'vm:vm-a',
@@ -36,6 +39,7 @@ describe('CopilotJournal', () => {
 
     const reloaded = new CopilotJournal(dir).load()
     expect(reloaded.messages.map((item) => item.id)).toContain('m1')
+    expect(reloaded.messages[0]?.openUi?.content).toBe('root = OperatorBrief("Fleet")')
     expect(reloaded.toolCalls[0]?.status).toBe('completed')
   })
 
