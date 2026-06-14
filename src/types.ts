@@ -327,6 +327,23 @@ export interface CopilotRuntimeStatus {
   state: CopilotRuntimeState
   detail?: string
   model?: string
+  /**
+   * Whether the kimi-code CLI is present on the machine. `false` means the copilot can't run
+   * until it's installed and drives the install prompt in the copilot panel. `undefined` for the
+   * mock driver, which needs no CLI.
+   */
+  kimiInstalled?: boolean
+}
+
+export type CopilotInstallStatus = 'idle' | 'running' | 'done' | 'error'
+
+/** Progress of an in-app `uv tool install kimi-cli` run, streamed to the copilot panel. */
+export interface CopilotInstallState {
+  status: CopilotInstallStatus
+  /** Accumulated stdout/stderr from the install steps, shown in a console block. */
+  log: string
+  /** One-line outcome or error summary. */
+  detail?: string
 }
 
 export interface CopilotProgressEvent {
@@ -397,6 +414,8 @@ export interface AppSnapshot {
   toolCalls: CopilotToolCall[]
   plans: CopilotPlanState[]
   runtime: CopilotRuntimeStatus
+  /** Current kimi-code install progress, so it survives a WS reconnect and reaches new clients. */
+  install: CopilotInstallState
 }
 
 export interface CopilotDeltaEvent {
@@ -417,6 +436,7 @@ export type ServerEvent =
   | { type: 'copilot.progress'; payload: CopilotProgressEvent }
   | { type: 'copilot.proposal.updated'; payload: ActionProposal }
   | { type: 'copilot.runtime'; payload: CopilotRuntimeStatus }
+  | { type: 'copilot.install'; payload: CopilotInstallState }
   | { type: 'activity.created'; payload: AuditEvent }
   | { type: 'terminal.output'; payload: { sessionId: string; vmId: string; command?: string; output: string } }
   | { type: 'terminal.data'; payload: { sessionId: string; vmId: string; data: string } }

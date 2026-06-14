@@ -334,6 +334,13 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
     response.json(store.copilotRuntimeStatus())
   })
 
+  app.post(
+    '/api/copilot/install',
+    asyncRoute(async (_request, response) => {
+      response.json(await store.installKimi())
+    }),
+  )
+
   app.post('/api/copilot/provider', (request, response) => {
     const body = copilotProviderSchema.parse(request.body)
     response.json(

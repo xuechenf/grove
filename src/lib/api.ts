@@ -4,6 +4,7 @@ import type {
   AppRunnerService,
   AppRunnerServiceInput,
   CommandRun,
+  CopilotInstallState,
   CopilotPermissionDecision,
   CopilotProviderStatus,
   CopilotRuntimeStatus,
@@ -195,6 +196,16 @@ export function cancelCopilot(scope: CopilotScope) {
 
 export function getCopilotRuntime() {
   return requestJson<CopilotRuntimeStatus>('/api/copilot/runtime')
+}
+
+/**
+ * Download and install the kimi-code CLI (uv tool install kimi-cli). Long-running; progress
+ * streams via `copilot.install` events while this awaits the final state.
+ */
+export function installKimiCli() {
+  return requestJson<{ install: CopilotInstallState; runtime: CopilotRuntimeStatus }>('/api/copilot/install', {
+    method: 'POST',
+  })
 }
 
 export function getCopilotProvider() {

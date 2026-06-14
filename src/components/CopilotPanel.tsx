@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Download,
   LoaderCircle,
   Send,
   ShieldQuestion,
@@ -18,6 +19,7 @@ import {
 } from 'react'
 import type {
   ActionProposal,
+  CopilotInstallState,
   CopilotMessage,
   CopilotPermissionDecision,
   CopilotPlanState,
@@ -34,6 +36,8 @@ interface CopilotPanelProps {
   scope: CopilotScope
   scopeLabel: string
   runtime: CopilotRuntimeStatus
+  install?: CopilotInstallState
+  onInstall?: () => void
   messages: CopilotMessage[]
   toolCalls: CopilotToolCall[]
   plans: CopilotPlanState[]
@@ -346,10 +350,62 @@ function groupIntoTurns(timeline: TimelineItem[]): TurnGroup[] {
   return groups
 }
 
+/**
+ * Shown when the kimi-code CLI isn't on the machine. Offers a one-click install (Grove runs
+ * `uv tool install kimi-cli`, bootstrapping uv from astral.sh first if needed) and streams the
+ * install log so the user sees exactly what runs.
+ */
+function InstallBanner({ install, onInstall }: { install?: CopilotInstallState; onInstall?: () => void }) {
+  const running = install?.status === 'running'
+  const failed = install?.status === 'error'
+  const log = install?.log?.trim()
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm" data-testid="kimi-install-banner">
+      <div className="flex items-start gap-3">
+        <Download className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold text-slate-900">kimi-code CLI not detected</h3>
+          <p className="mt-0.5 text-xs text-slate-600">
+            The copilot runs on the local kimi-code CLI. Grove can download and configure it for
+            you — it installs <span className="font-mono">uv</span> from astral.sh if needed, then
+            runs <span className="font-mono">uv tool install kimi-cli</span>.
+          </p>
+          <button
+            type="button"
+            onClick={onInstall}
+            disabled={running || !onInstall}
+            className="mt-2 inline-flex h-8 items-center gap-2 rounded border border-slate-900 bg-slate-900 px-3 font-mono text-xs font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {running ? (
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            {running ? 'Installing…' : failed ? 'Retry install' : 'Download & install kimi-code'}
+          </button>
+          {install?.detail && !running ? (
+            <p className={`mt-2 text-xs ${failed ? 'text-rose-700' : 'text-emerald-700'}`}>{install.detail}</p>
+          ) : null}
+          {log ? (
+            <pre
+              data-testid="kimi-install-log"
+              className="mt-2 max-h-48 overflow-auto rounded border border-slate-800 bg-slate-950 px-2.5 py-2 text-[11px] leading-relaxed text-slate-100"
+            >
+              {log}
+            </pre>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function CopilotPanel({
   scope,
   scopeLabel,
   runtime,
+  install,
+  onInstall,
   messages,
   toolCalls,
   plans,
@@ -568,7 +624,9 @@ export function CopilotPanel({
 
       <div className="min-h-0 flex-1 overflow-auto bg-white px-4 py-5">
         <div className="mx-auto flex max-w-3xl flex-col gap-4">
-          {timeline.length === 0 ? (
+          {runtime.kimiInstalled === false ? <InstallBanner install={install} onInstall={onInstall} /> : null}
+
+          {timeline.length === 0 && runtime.kimiInstalled !== false ? (
             <div className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
               {scope === 'fleet'
                 ? 'Ask about the whole fleet — health, which VMs need attention, or run something across machines.'

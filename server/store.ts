@@ -9,6 +9,7 @@ import type {
   AppSnapshot,
   AuditEvent,
   CommandRun,
+  CopilotInstallState,
   CopilotMessage,
   CopilotPermissionDecision,
   CopilotPlanEntryStatus,
@@ -29,6 +30,7 @@ import type {
 import { scopeVmId, vmScope } from '../src/types'
 import { loadAppRunnerServices, saveAppRunnerServices } from './appRunnerMetadata'
 import { classifyCommand, isReadOnlyCommand } from './commandProfiles'
+import { installKimiCli } from './copilotInstall'
 import { CopilotJournal } from './copilotJournal'
 import { CopilotPolicy } from './copilotPolicy'
 import { CopilotSupervisor } from './copilotSupervisor'
@@ -732,6 +734,8 @@ export interface GroveStoreOptions {
   journal?: CopilotJournal
   policy?: CopilotPolicy
   tokens?: ScopeTokenRegistry
+  /** kimi-code CLI installer; injectable so tests don't shell out to a real install. */
+  installer?: typeof installKimiCli
 }
 
 export class GroveStore implements CopilotToolHost {
@@ -741,6 +745,8 @@ export class GroveStore implements CopilotToolHost {
   private readonly policy: CopilotPolicy
   readonly scopeTokens: ScopeTokenRegistry
   private readonly supervisor: CopilotSupervisor
+  private readonly installer: typeof installKimiCli
+  private installState: CopilotInstallState = { status: 'idle', log: '' }
   private readonly mutationLock = new KeyedMutex()
   /**
    * One confirmation card at a time per scope. When the agent issues several gated
@@ -773,6 +779,7 @@ export class GroveStore implements CopilotToolHost {
     this.supervisor =
       options.supervisor ??
       new CopilotSupervisor({ host: this, tokens: this.scopeTokens, driver: options.driver })
+    this.installer = options.installer ?? installKimiCli
     const configs = loadInventory()
     this.vmConfigs = configs
     this.vms = this.vmConfigs.map((config) => vmFromConfig(config, fixtureVms.find((vm) => vm.id === config.id)))
@@ -828,6 +835,48 @@ export class GroveStore implements CopilotToolHost {
     return this.supervisor.status()
   }
 
+  copilotInstallState(): CopilotInstallState {
+    return this.installState
+  }
+
+  private setInstallState(next: Partial<CopilotInstallState>) {
+    this.installState = { ...this.installState, ...next }
+    this.publish({ type: 'copilot.install', payload: this.installState })
+  }
+
+  /**
+   * Install the kimi-code CLI on demand (uv tool install kimi-cli), streaming progress to the
+   * copilot panel via copilot.install events and refreshing runtime status when it finishes so
+   * the install prompt clears. Idempotent while a run is in flight.
+   */
+  async installKimi(): Promise<{ install: CopilotInstallState; runtime: CopilotRuntimeStatus }> {
+    if (this.installState.status === 'running') {
+      return { install: this.installState, runtime: this.supervisor.status() }
+    }
+    // Fresh run: reset the log (don't merge onto a previous run's output).
+    this.installState = { status: 'running', log: '', detail: 'Starting install…' }
+    this.publish({ type: 'copilot.install', payload: this.installState })
+
+    const append = (line: string) => {
+      this.setInstallState({ log: this.installState.log ? `${this.installState.log}\n${line}` : line })
+    }
+
+    try {
+      const result = await this.installer(append)
+      this.setInstallState(
+        result.ok
+          ? { status: 'done', detail: `kimi-code CLI installed (${result.binary}).` }
+          : { status: 'error', detail: result.error ?? 'Install failed.' },
+      )
+    } catch (error) {
+      this.setInstallState({ status: 'error', detail: error instanceof Error ? error.message : 'Install failed.' })
+    }
+
+    const runtime = this.supervisor.status()
+    this.publish({ type: 'copilot.runtime', payload: runtime })
+    return { install: this.installState, runtime }
+  }
+
   copilotWorkspaceDir(scope: CopilotScope) {
     return this.supervisor.workspaceDir(scope)
   }
@@ -851,6 +900,7 @@ export class GroveStore implements CopilotToolHost {
       toolCalls: this.toolCalls,
       plans: this.plans,
       runtime: this.supervisor.status(),
+      install: this.installState,
     }
   }
 

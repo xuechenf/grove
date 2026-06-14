@@ -4,7 +4,7 @@ import { StringDecoder } from 'node:string_decoder'
 import type { CopilotRuntimeStatus, CopilotScope } from '../../src/types'
 import type { CopilotDriver, DriverUpdate, PromptRequest, PromptResult } from '../copilotTypes'
 import { envValue } from '../env'
-import { formatKimiLaunchError, kimiBinaryFromEnv, kimiSpawnEnv } from './kimiBinary'
+import { formatKimiLaunchError, isKimiInstalled, kimiBinaryFromEnv, kimiSpawnEnv } from './kimiBinary'
 
 export interface PrintDriverOptions {
   binary?: string
@@ -37,7 +37,9 @@ function sessionTurnsFromEnv() {
  */
 export class PrintDriver implements CopilotDriver {
   readonly name = 'print' as const
-  private readonly binary: string
+  /** Explicit override (tests); when unset the binary is re-resolved per turn so an in-app
+   * install lands without a restart (the new kimi appears in ~/.local/bin, off the GUI PATH). */
+  private readonly binaryOverride?: string
   private readonly model?: string
   private readonly configFile?: string
   private readonly sessionId: (scope: CopilotScope, turn: number) => string | undefined
@@ -48,7 +50,7 @@ export class PrintDriver implements CopilotDriver {
   private lastError?: string
 
   constructor(options: PrintDriverOptions = {}) {
-    this.binary = options.binary ?? kimiBinaryFromEnv()
+    this.binaryOverride = options.binary
     this.model = options.model
     this.configFile = options.configFile
     this.spawnProcess = options.spawn ?? spawn
@@ -69,6 +71,10 @@ export class PrintDriver implements CopilotDriver {
 
   async start() {
     // Nothing persistent to start; each prompt spawns its own process.
+  }
+
+  private resolveBinary() {
+    return this.binaryOverride ?? kimiBinaryFromEnv()
   }
 
   prompt(request: PromptRequest): Promise<PromptResult> {
@@ -98,7 +104,8 @@ export class PrintDriver implements CopilotDriver {
     }
     args.push('--prompt', request.message)
 
-    const child = this.spawnProcess(this.binary, args, { cwd: request.cwd, env: kimiSpawnEnv() })
+    const binary = this.resolveBinary()
+    const child = this.spawnProcess(binary, args, { cwd: request.cwd, env: kimiSpawnEnv() })
     this.active.set(request.scope, child)
 
     let finalText = ''
@@ -127,7 +134,7 @@ export class PrintDriver implements CopilotDriver {
     return new Promise<PromptResult>((resolve) => {
       child.on('error', (error) => {
         launchFailed = true
-        this.lastError = formatKimiLaunchError(error, this.binary)
+        this.lastError = formatKimiLaunchError(error, binary)
         this.active.delete(request.scope)
         resolve({ text: this.lastError, stopReason: 'error' })
       })
@@ -163,11 +170,13 @@ export class PrintDriver implements CopilotDriver {
   }
 
   status(): CopilotRuntimeStatus {
+    const installed = this.binaryOverride ? isKimiInstalled({ env: this.binaryOverride }) : isKimiInstalled()
     return {
       driver: 'print',
       state: this.lastError ? 'error' : 'ready',
-      detail: this.lastError ?? `kimi print-mode driver (per-turn). Binary: ${this.binary}`,
+      detail: this.lastError ?? `kimi print-mode driver (per-turn). Binary: ${this.resolveBinary()}`,
       model: this.model,
+      kimiInstalled: installed,
     }
   }
 }

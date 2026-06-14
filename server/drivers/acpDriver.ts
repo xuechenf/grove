@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { CopilotRuntimeStatus, CopilotScope, CopilotToolCallKind, CopilotToolCallStatus } from '../../src/types'
 import { AcpConnection } from '../acpClient'
 import type { CopilotDriver, DriverUpdate, PromptRequest, PromptResult } from '../copilotTypes'
-import { formatKimiLaunchError, kimiBinaryFromEnv, kimiSpawnEnv } from './kimiBinary'
+import { formatKimiLaunchError, isKimiInstalled, kimiBinaryFromEnv, kimiSpawnEnv } from './kimiBinary'
 
 export interface AcpDriverOptions {
   binary?: string
@@ -24,7 +24,9 @@ const ACP_PROTOCOL_VERSION = 1
  */
 export class AcpDriver implements CopilotDriver {
   readonly name = 'acp' as const
-  private readonly binary: string
+  /** Explicit override (tests); otherwise the binary is resolved lazily so an in-app install is
+   * picked up on the next connect without a restart (matches PrintDriver). */
+  private readonly binaryOverride?: string
   private readonly model?: string
   private child?: ChildProcessWithoutNullStreams
   private connection?: AcpConnection
@@ -36,8 +38,12 @@ export class AcpDriver implements CopilotDriver {
   private detail = 'Starting kimi ACP server.'
 
   constructor(options: AcpDriverOptions = {}) {
-    this.binary = options.binary ?? kimiBinaryFromEnv()
+    this.binaryOverride = options.binary
     this.model = options.model
+  }
+
+  private resolveBinary() {
+    return this.binaryOverride ?? kimiBinaryFromEnv()
   }
 
   async start() {
@@ -52,9 +58,10 @@ export class AcpDriver implements CopilotDriver {
       return this.initializing
     }
 
+    const binary = this.resolveBinary()
     this.initializing = (async () => {
       this.state = 'starting'
-      const child = spawn(this.binary, ['acp'], { env: kimiSpawnEnv() })
+      const child = spawn(binary, ['acp'], { env: kimiSpawnEnv() })
       this.child = child
       const connection = new AcpConnection(child)
       this.connection = connection
@@ -67,7 +74,7 @@ export class AcpDriver implements CopilotDriver {
       child.on('error', (error) => {
         launchFailed = true
         this.state = 'error'
-        this.detail = formatKimiLaunchError(error, this.binary)
+        this.detail = formatKimiLaunchError(error, binary)
         this.connection = undefined
       })
       child.on('exit', () => {
@@ -88,7 +95,7 @@ export class AcpDriver implements CopilotDriver {
         this.detail = 'kimi ACP server ready.'
       } catch (error) {
         this.state = 'error'
-        this.detail = formatKimiLaunchError(error, this.binary)
+        this.detail = formatKimiLaunchError(error, binary)
         throw new Error(this.detail, { cause: error })
       }
     })()
@@ -165,8 +172,8 @@ export class AcpDriver implements CopilotDriver {
   }
 
   status(): CopilotRuntimeStatus {
-    const detail = this.state === 'ready' ? `${this.detail} Binary: ${this.binary}` : this.detail
-    return { driver: 'acp', state: this.state, detail, model: this.model }
+    const detail = this.state === 'ready' ? `${this.detail} Binary: ${this.resolveBinary()}` : this.detail
+    return { driver: 'acp', state: this.state, detail, model: this.model, kimiInstalled: isKimiInstalled() }
   }
 
   private onNotification(method: string, params: unknown) {

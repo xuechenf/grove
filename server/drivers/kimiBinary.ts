@@ -35,6 +35,41 @@ function commonInstallDirs(platform: NodeJS.Platform, home: string) {
 }
 
 /**
+ * Find a kimi executable that actually exists on disk, or return undefined. Unlike
+ * resolveKimiBinary this never falls back to a bare name, so it answers "is kimi installed?"
+ * and (for a freshly `uv tool install`-ed binary) "where did it land?". Precedence mirrors
+ * resolveKimiBinary, but a configured GROVE_KIMI_BIN that points nowhere counts as missing.
+ */
+export function findKimiBinary(lookup: KimiBinaryLookup = {}): string | undefined {
+  const exists = lookup.exists ?? existsSync
+  const configured = (lookup.env ?? envValue('GROVE_KIMI_BIN'))?.trim()
+  if (configured) {
+    return exists(configured) ? configured : undefined
+  }
+
+  const platform = lookup.platform ?? process.platform
+  const home = lookup.home ?? homedir()
+  const names = binaryNames(platform)
+
+  const pathDirs = (lookup.pathEnv ?? process.env.PATH ?? '').split(delimiter).filter(Boolean)
+  for (const dir of [...pathDirs, ...commonInstallDirs(platform, home)]) {
+    for (const name of names) {
+      const full = join(dir, name)
+      if (exists(full)) {
+        return full
+      }
+    }
+  }
+
+  return undefined
+}
+
+/** Whether a usable kimi executable is present. Drives the copilot panel's install prompt. */
+export function isKimiInstalled(lookup: KimiBinaryLookup = {}): boolean {
+  return findKimiBinary(lookup) !== undefined
+}
+
+/**
  * Resolve the kimi executable. Precedence:
  * 1. GROVE_KIMI_BIN (explicit, wins outright).
  * 2. A bare `kimi` if it already resolves on PATH (let spawn find it).

@@ -13,7 +13,7 @@ import { localEnvPath, saveMoonshotLocalEnv } from './env'
 import { resolveProjectStateReference } from './projectState'
 import { MockDriver, type MockScripter } from './drivers/mockDriver'
 import { OPENUI_OPERATOR_BRIEF_PROMPT } from '../src/openui/operatorBriefPrompt'
-import type { CommandRun, FileNode, TerminalSession, VM } from '../src/types'
+import type { CommandRun, CopilotInstallState, FileNode, ServerEvent, TerminalSession, VM } from '../src/types'
 import type {
   CommandExecutionRequest,
   DirectoryUploadExecutionRequest,
@@ -1194,5 +1194,47 @@ vms:
       .send({ scope: 'fleet', message: 'hi' })
       .expect(201)
     await request(app).get('/api/snapshot').expect(200)
+  })
+})
+
+describe('copilot install orchestration', () => {
+  it('streams progress and reports success via store.installKimi', async () => {
+    const installer = async (onLog: (line: string) => void) => {
+      onLog('Found uv')
+      onLog('Installing kimi-cli…')
+      return { ok: true, binary: '/home/op/.local/bin/kimi' }
+    }
+    const store = new GroveStore(undefined, { driver: new MockDriver(), installer })
+    const events: ServerEvent[] = []
+    store.onEvent((event) => events.push(event))
+
+    const result = await store.installKimi()
+
+    expect(result.install.status).toBe('done')
+    expect(result.install.log).toContain('Installing kimi-cli')
+    const installEvents = events.filter((event) => event.type === 'copilot.install')
+    expect(installEvents.length).toBeGreaterThan(1) // running → log appends → done
+    expect((installEvents.at(-1)!.payload as CopilotInstallState).status).toBe('done')
+    // Runtime is re-broadcast so the panel re-checks kimiInstalled and clears the prompt.
+    expect(events.some((event) => event.type === 'copilot.runtime')).toBe(true)
+  })
+
+  it('reports an error outcome when the installer fails', async () => {
+    const installer = async () => ({ ok: false, error: 'uv tool install kimi-cli failed (exit 1).' })
+    const store = new GroveStore(undefined, { driver: new MockDriver(), installer })
+
+    const result = await store.installKimi()
+
+    expect(result.install.status).toBe('error')
+    expect(result.install.detail).toContain('exit 1')
+  })
+
+  it('exposes POST /api/copilot/install', async () => {
+    const installer = async () => ({ ok: true, binary: 'kimi' })
+    const { app } = createGroveApp(new GroveStore(undefined, { driver: new MockDriver(), installer }))
+
+    const response = await request(app).post('/api/copilot/install').expect(200)
+
+    expect(response.body.install.status).toBe('done')
   })
 })

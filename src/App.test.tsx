@@ -674,4 +674,48 @@ describe('Grove VM console', () => {
     await user.click(screen.getByRole('button', { name: /hide console log/i }))
     expect(screen.queryByTestId('tool-console-log')).not.toBeInTheDocument()
   })
+
+  function renderPanel(overrides: Partial<Parameters<typeof CopilotPanel>[0]> = {}) {
+    return render(
+      <CopilotPanel
+        scope="fleet"
+        scopeLabel="All VMs"
+        runtime={{ driver: 'print', state: 'ready', kimiInstalled: false }}
+        messages={[]}
+        toolCalls={[]}
+        plans={[]}
+        progress={[]}
+        proposals={[]}
+        isBusy={false}
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={() => undefined}
+        {...overrides}
+      />,
+    )
+  }
+
+  it('offers a kimi-code install prompt when the CLI is not detected', async () => {
+    const user = userEvent.setup()
+    const onInstall = vi.fn()
+    renderPanel({ onInstall })
+
+    const banner = screen.getByTestId('kimi-install-banner')
+    expect(banner).toHaveTextContent('kimi-code CLI not detected')
+
+    await user.click(screen.getByRole('button', { name: /download & install kimi-code/i }))
+    expect(onInstall).toHaveBeenCalledTimes(1)
+  })
+
+  it('streams the install log and disables the button while installing', () => {
+    renderPanel({ install: { status: 'running', log: 'Installing uv…\nFetching kimi-cli…' } })
+
+    expect(screen.getByTestId('kimi-install-log')).toHaveTextContent('Fetching kimi-cli')
+    expect(screen.getByRole('button', { name: /installing/i })).toBeDisabled()
+  })
+
+  it('hides the install prompt once kimi is detected', () => {
+    renderPanel({ runtime: { driver: 'print', state: 'ready', kimiInstalled: true } })
+    expect(screen.queryByTestId('kimi-install-banner')).not.toBeInTheDocument()
+  })
 })

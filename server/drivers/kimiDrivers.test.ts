@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CopilotScope } from '../../src/types'
 import type { PromptRequest } from '../copilotTypes'
 import { AcpDriver } from './acpDriver'
-import { formatKimiLaunchError, kimiBinaryFromEnv, resolveKimiBinary } from './kimiBinary'
+import { findKimiBinary, formatKimiLaunchError, isKimiInstalled, kimiBinaryFromEnv, resolveKimiBinary } from './kimiBinary'
 import { PrintDriver } from './printDriver'
 
 const missingBinary = 'grove-missing-kimi-binary'
@@ -133,6 +133,38 @@ describe('kimi binary configuration', () => {
 
     expect(formatKimiLaunchError(error, 'kimi')).toContain('uv tool install kimi-cli')
     expect(formatKimiLaunchError(error, 'kimi')).toContain('GROVE_KIMI_BIN')
+  })
+})
+
+describe('kimi install detection', () => {
+  it('findKimiBinary returns undefined when nothing exists', () => {
+    const found = findKimiBinary({ env: undefined, platform: 'linux', home: '/home/op', pathEnv: '/usr/bin', exists: () => false })
+    expect(found).toBeUndefined()
+  })
+
+  it('honors an existing GROVE_KIMI_BIN but rejects one that points nowhere', () => {
+    expect(findKimiBinary({ env: '/opt/kimi', exists: (path) => path === '/opt/kimi' })).toBe('/opt/kimi')
+    expect(findKimiBinary({ env: '/opt/kimi', exists: () => false })).toBeUndefined()
+  })
+
+  it('discovers a uv-installed kimi in ~/.local/bin even when it is off PATH', () => {
+    const target = join('/home/op', '.local', 'bin', 'kimi')
+    const found = findKimiBinary({
+      env: undefined,
+      platform: 'linux',
+      home: '/home/op',
+      pathEnv: '/usr/bin',
+      exists: (path) => path === target,
+    })
+    expect(found).toBe(target)
+  })
+
+  it('isKimiInstalled mirrors findKimiBinary', () => {
+    const base = { env: undefined, platform: 'linux' as const, home: '/home/op', pathEnv: '/usr/bin' }
+    // join() uses the host separator like the production code, so this matches on any OS.
+    const onPath = join('/usr/bin', 'kimi')
+    expect(isKimiInstalled({ ...base, exists: () => false })).toBe(false)
+    expect(isKimiInstalled({ ...base, exists: (path) => path === onPath })).toBe(true)
   })
 })
 

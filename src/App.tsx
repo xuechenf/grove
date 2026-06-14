@@ -43,6 +43,7 @@ import {
   getCopilotProvider,
   getLocalDefaults,
   getSnapshot,
+  installKimiCli,
   isApiUnavailableError,
   listAppRunnerServices,
   listLocalFiles,
@@ -70,6 +71,7 @@ import type {
   AppRunnerService,
   AppRunnerServiceInput,
   ActivityEvent,
+  CopilotInstallState,
   CopilotPermissionDecision,
   CopilotPlanState,
   CopilotProviderStatus,
@@ -384,6 +386,7 @@ function App() {
   const [copilotProgress, setCopilotProgress] = useState<CopilotProgressEvent[]>([])
   const [copilotBusyByScope, setCopilotBusyByScope] = useState<Record<string, boolean>>({})
   const [copilotRuntime, setCopilotRuntime] = useState<CopilotRuntimeStatus>({ driver: 'mock', state: 'disabled' })
+  const [copilotInstall, setCopilotInstall] = useState<CopilotInstallState>({ status: 'idle', log: '' })
   const [providerStatus, setProviderStatus] = useState<CopilotProviderStatus>(initialProviderStatus)
   const deltaBufferRef = useRef<Map<string, string>>(new Map())
   const deltaFrameRef = useRef<number | null>(null)
@@ -457,6 +460,7 @@ function App() {
         setToolCalls(snapshot.toolCalls ?? [])
         setPlans(snapshot.plans ?? [])
         setCopilotRuntime(snapshot.runtime ?? { driver: 'mock', state: 'disabled' })
+        setCopilotInstall(snapshot.install ?? { status: 'idle', log: '' })
         setSelectedVmId((current) => selectAvailableVm(current, snapshot.vms))
       })
       .catch(() => {
@@ -492,6 +496,7 @@ function App() {
           setToolCalls(event.payload.toolCalls ?? [])
           setPlans(event.payload.plans ?? [])
           setCopilotRuntime(event.payload.runtime ?? { driver: 'mock', state: 'disabled' })
+          setCopilotInstall(event.payload.install ?? { status: 'idle', log: '' })
           setSelectedVmId((current) => selectAvailableVm(current, event.payload.vms))
           return
         }
@@ -540,6 +545,11 @@ function App() {
 
         if (event.type === 'copilot.runtime') {
           setCopilotRuntime(event.payload)
+          return
+        }
+
+        if (event.type === 'copilot.install') {
+          setCopilotInstall(event.payload)
           return
         }
 
@@ -1313,6 +1323,27 @@ function App() {
     setCopilotBusyByScope((current) => ({ ...current, [scope]: false }))
   }
 
+  async function installCopilotCli() {
+    if (apiDisabled() || copilotInstall.status === 'running') {
+      return
+    }
+    setCopilotInstall({ status: 'running', log: '', detail: 'Starting install…' })
+    try {
+      const { install, runtime } = await installKimiCli()
+      setCopilotInstall(install)
+      setCopilotRuntime(runtime)
+    } catch (error) {
+      // Preserve whatever log streamed in over copilot.install events (the closure's copilotInstall
+      // is stale); only a transport-level rejection reaches here, since the backend returns
+      // installer failures as a resolved error state.
+      setCopilotInstall((current) => ({
+        status: 'error',
+        log: current.log,
+        detail: error instanceof Error ? error.message : 'Install failed.',
+      }))
+    }
+  }
+
   function openWorkspaceTarget(target: { vmId?: string; tab?: TabId }) {
     const targetVmId = target.vmId ?? scopeVmId(copilotScope) ?? selectedVmId
     if (targetVmId) {
@@ -1454,6 +1485,8 @@ function App() {
             scope={copilotScope}
             scopeLabel={copilotScopeLabel}
             runtime={copilotRuntime}
+            install={copilotInstall}
+            onInstall={installCopilotCli}
             messages={scopeMessages}
             toolCalls={scopeToolCalls}
             plans={scopePlans}
