@@ -24,8 +24,10 @@ import type {
   CopilotRuntimeStatus,
   CopilotScope,
   CopilotToolCall,
+  TabId,
 } from '../types'
 import { Markdown } from './Markdown'
+import { OpenUiArtifact, type OperatorBriefAction } from './OpenUiArtifact'
 
 interface CopilotPanelProps {
   scope: CopilotScope
@@ -37,7 +39,8 @@ interface CopilotPanelProps {
   progress: CopilotProgressEvent[]
   proposals: ActionProposal[]
   isBusy: boolean
-  onSendMessage: (message: string) => void
+  onSendMessage: (message: string, options?: { referenceHistory?: boolean }) => void
+  onOpenWorkspaceTarget?: (target: { vmId?: string; tab?: TabId }) => void
   onDecideProposal: (proposalId: string, decision: CopilotPermissionDecision) => void
   onCancel: () => void
 }
@@ -325,10 +328,12 @@ export function CopilotPanel({
   proposals,
   isBusy,
   onSendMessage,
+  onOpenWorkspaceTarget = () => undefined,
   onDecideProposal,
   onCancel,
 }: CopilotPanelProps) {
   const [draft, setDraft] = useState('')
+  const [referenceHistory, setReferenceHistory] = useState(false)
   const bottomRef = useRef<HTMLDivElement | null>(null)
 
   const timeline = useMemo<TimelineItem[]>(() => {
@@ -386,7 +391,7 @@ export function CopilotPanel({
     if (!trimmed || isBusy) {
       return
     }
-    onSendMessage(trimmed)
+    onSendMessage(trimmed, { referenceHistory })
     setDraft('')
   }
 
@@ -396,6 +401,31 @@ export function CopilotPanel({
     }
     event.preventDefault()
     submit()
+  }
+
+  function handleOpenUiAction(action: OperatorBriefAction) {
+    if (action.kind === 'focus_vm') {
+      onOpenWorkspaceTarget({ vmId: action.vmId })
+      return
+    }
+
+    if (action.kind === 'open_tab') {
+      onOpenWorkspaceTarget({ vmId: action.vmId, tab: action.tab })
+      return
+    }
+
+    if (action.kind === 'ask_followup') {
+      if (!isBusy) {
+        onSendMessage(action.message ?? action.label)
+      }
+      return
+    }
+
+    if (!isBusy) {
+      const target = action.vmId ? ` on ${action.vmId}` : ''
+      const subject = action.message ?? action.label
+      onSendMessage(`Propose a safe Grove-confirmed fix${target}: ${subject}`)
+    }
   }
 
   const runtimeLabel =
@@ -429,7 +459,7 @@ export function CopilotPanel({
 
     const message = item.data
     // An empty streaming bubble has nothing to show; the status line covers it.
-    if (message.streaming && !message.content) {
+    if (message.streaming && !message.content && !message.openUi) {
       return null
     }
     return (
@@ -446,7 +476,12 @@ export function CopilotPanel({
               </span>
             </p>
           ) : (
-            <Markdown content={message.content} />
+            <div className="space-y-3">
+              {message.content.trim() ? <Markdown content={message.content} /> : null}
+              {message.openUi ? (
+                <OpenUiArtifact artifact={message.openUi} disabled={isBusy} onAction={handleOpenUiAction} />
+              ) : null}
+            </div>
           )}
         </div>
       </div>
@@ -558,8 +593,19 @@ export function CopilotPanel({
               {isBusy ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Send className="h-4 w-4" aria-hidden="true" />}
             </button>
           </div>
-          <div className="mt-1.5 flex items-center justify-between font-mono text-[11px] text-slate-400">
-            <span className="truncate">{scope === 'fleet' ? 'Fleet context' : scopeLabel}</span>
+          <div className="mt-1.5 flex items-center justify-between gap-3 font-mono text-[11px] text-slate-400">
+            <label
+              className="flex min-w-0 cursor-pointer items-center gap-1.5 text-slate-500 hover:text-slate-700"
+              title="Include this scope's recent execution history in the request. Off by default to keep sessions short and cheap; turn on for follow-ups that need prior context."
+            >
+              <input
+                type="checkbox"
+                checked={referenceHistory}
+                onChange={(event) => setReferenceHistory(event.target.checked)}
+                className="h-3.5 w-3.5 shrink-0 accent-slate-900"
+              />
+              <span className="truncate">Reference history</span>
+            </label>
             <span className="shrink-0">enter to send · shift+enter for newline</span>
           </div>
         </div>

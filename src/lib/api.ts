@@ -179,7 +179,7 @@ export function createTransfer(input: {
   })
 }
 
-export function sendCopilotMessage(input: { scope: CopilotScope; message: string }) {
+export function sendCopilotMessage(input: { scope: CopilotScope; message: string; referenceHistory?: boolean }) {
   return requestJson<{ messages: AppSnapshot['messages']; proposals: ActionProposal[] }>('/api/copilot/messages', {
     method: 'POST',
     body: JSON.stringify(input),

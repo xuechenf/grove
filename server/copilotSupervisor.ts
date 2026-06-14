@@ -3,8 +3,9 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { CopilotRuntimeStatus, CopilotScope, VM } from '../src/types'
 import { scopeVmId } from '../src/types'
+import { OPENUI_OPERATOR_BRIEF_PROMPT } from '../src/openui/operatorBriefPrompt'
 import type { CopilotDriver, CopilotToolHost, DriverUpdate, McpServerSpec } from './copilotTypes'
-import { GROVE_KIMI_MODEL_NAME, ensureKimiConfigFile } from './copilotProvider'
+import { GROVE_KIMI_MODEL_NAME, ensureKimiConfigFile, kimiToolCallTimeoutMs } from './copilotProvider'
 import { AcpDriver } from './drivers/acpDriver'
 import { MockDriver } from './drivers/mockDriver'
 import { PrintDriver } from './drivers/printDriver'
@@ -97,8 +98,9 @@ export class CopilotSupervisor {
   private prepareWorkspace(scope: CopilotScope) {
     const dir = this.scopeDir(scope)
     mkdirSync(dir, { recursive: true })
-    // AGENTS.md holds only stable facts and is refreshed each prompt; live state comes from
-    // tools so a long-lived session never carries a stale metrics snapshot.
+    // AGENTS.md holds only stable facts (identity, how-to, sibling ids), so its bytes are
+    // identical turn-over-turn — that lets Moonshot's prompt cache reuse the prefix instead of
+    // re-billing it. Live state (metrics, service/health) is fetched via tools, never embedded.
     writeFileSync(join(dir, 'AGENTS.md'), this.buildAgentsDoc(scope), 'utf8')
     const notesPath = join(dir, 'notes.md')
     if (!existsSync(notesPath)) {
@@ -110,7 +112,13 @@ export class CopilotSupervisor {
 
   private mcpSpec(scope: CopilotScope): McpServerSpec {
     const token = this.tokens.tokenForScope(scope)
-    const env = { GROVE_MCP_URL: this.backendUrl, GROVE_MCP_SCOPE_TOKEN: token }
+    // The proxy's HTTP wait must outlast kimi's tool-call timeout, so it never gives up on a
+    // long (but legitimately running) backend call before kimi would.
+    const env = {
+      GROVE_MCP_URL: this.backendUrl,
+      GROVE_MCP_SCOPE_TOKEN: token,
+      GROVE_MCP_PROXY_TIMEOUT_MS: String(kimiToolCallTimeoutMs() + 60000),
+    }
     const configDir = join(this.rootDir, 'mcp')
     mkdirSync(configDir, { recursive: true })
     const configPath = join(configDir, `${scope.replace(/[^a-zA-Z0-9_-]/g, '-')}.json`)
@@ -139,7 +147,7 @@ export class CopilotSupervisor {
   }
 }
 
-function buildVmAgentsDoc(vm: VM, fleet: VM[]): string {
+export function buildVmAgentsDoc(vm: VM, fleet: VM[]): string {
   const siblings = fleet
     .filter((other) => other.id !== vm.id)
     .map((other) => `${other.name} (${other.id})`)
@@ -166,9 +174,10 @@ function buildVmAgentsDoc(vm: VM, fleet: VM[]): string {
     '- You cannot reach other VMs from this session.',
     '- Save durable facts with record_note; check get_history and notes.md for earlier context.',
     '',
-    '## Tracked services',
-    vm.services.length ? vm.services.map((service) => `- ${service.name}: ${service.state}`).join('\n') : '- none recorded',
+    OPENUI_OPERATOR_BRIEF_PROMPT,
     '',
+    // Live service/health state is intentionally NOT embedded here (it would bust the prompt
+    // cache every turn and risk going stale); call inspect_vm / diagnose_service for it.
     `## Fleet siblings\n${siblings ? `- ${siblings}` : '- none'}`,
     '',
     'See notes.md in this directory for facts learned in earlier sessions.',
@@ -176,7 +185,7 @@ function buildVmAgentsDoc(vm: VM, fleet: VM[]): string {
   ].join('\n')
 }
 
-function buildFleetAgentsDoc(fleet: VM[]): string {
+export function buildFleetAgentsDoc(fleet: VM[]): string {
   return [
     '# Grove Fleet',
     '',
@@ -190,11 +199,13 @@ function buildFleetAgentsDoc(fleet: VM[]): string {
     '- For deep single-machine work, tell the user to select that VM (its own focused session).',
     '- Save durable facts with record_note; check get_history and notes.md for earlier context.',
     '',
+    OPENUI_OPERATOR_BRIEF_PROMPT,
+    '',
+    // Names/ids/hosts only — current lifecycle/health is fetched via list_vms / inspect_vm so
+    // this prefix stays byte-stable across turns for prompt-cache reuse.
     '## VMs',
     fleet.length
-      ? fleet
-          .map((vm) => `- ${vm.name} (${vm.id}): ${vm.connection.host}, ${vm.lifecycle}/${vm.health}`)
-          .join('\n')
+      ? fleet.map((vm) => `- ${vm.name} (${vm.id}): ${vm.connection.host}`).join('\n')
       : '- none',
     '',
     'See notes.md in this directory for facts learned in earlier sessions.',

@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { FileNode } from '../src/types'
@@ -22,12 +22,22 @@ function localId(path: string) {
 
 export function listLocalFiles(path = process.cwd()): FileNode[] {
   const directory = resolve(path)
-  mkdirSync(directory, { recursive: true })
+  // Listing is a read: a missing path returns nothing rather than being created on disk.
+  if (!existsSync(directory)) {
+    return []
+  }
 
   return readdirSync(directory)
-    .map((name) => {
+    .map((name): FileNode | undefined => {
       const fullPath = join(directory, name)
-      const stat = statSync(fullPath)
+      // Skip entries we cannot stat (dangling symlinks, Windows junctions that EPERM,
+      // races where the file vanished) instead of failing the whole listing.
+      let stat: ReturnType<typeof statSync>
+      try {
+        stat = statSync(fullPath)
+      } catch {
+        return undefined
+      }
       return {
         id: localId(fullPath),
         scope: 'local' as const,
@@ -39,6 +49,7 @@ export function listLocalFiles(path = process.cwd()): FileNode[] {
         owner: 'local',
       }
     })
+    .filter((node): node is FileNode => Boolean(node))
     .sort((left, right) => {
       if (left.type !== right.type) {
         return left.type === 'folder' ? -1 : 1

@@ -13,6 +13,10 @@ import { createInterface } from 'node:readline'
 const BASE_URL = (process.env.GROVE_MCP_URL || 'http://127.0.0.1:8787').replace(/\/$/, '')
 const SCOPE_TOKEN = process.env.GROVE_MCP_SCOPE_TOKEN || ''
 const PROTOCOL_VERSION = '2024-11-05'
+// Backend tool calls (gated fleet apt upgrades, etc.) can legitimately run for minutes. Without
+// this, Node fetch's ~300s undici default would abort the call early; the supervisor sets this to
+// outlast kimi's own tool-call timeout so the proxy never gives up before kimi would.
+const REQUEST_TIMEOUT_MS = Math.max(60000, Number(process.env.GROVE_MCP_PROXY_TIMEOUT_MS) || 960000)
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`)
@@ -30,6 +34,7 @@ async function backend(path, init) {
   const response = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', 'x-grove-scope': SCOPE_TOKEN, ...(init?.headers || {}) },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   if (!response.ok) {
     const text = await response.text().catch(() => response.statusText)

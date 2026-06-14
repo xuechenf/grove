@@ -3,12 +3,30 @@ import { createInterface } from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import type { CopilotRuntimeStatus, CopilotScope } from '../../src/types'
 import type { CopilotDriver, DriverUpdate, PromptRequest, PromptResult } from '../copilotTypes'
+import { envValue } from '../env'
+import { formatKimiLaunchError, kimiBinaryFromEnv, kimiSpawnEnv } from './kimiBinary'
 
 export interface PrintDriverOptions {
   binary?: string
   model?: string
   configFile?: string
-  sessionId?: (scope: CopilotScope) => string
+  /** Resolve the kimi `--session` id for a scope's Nth turn; return undefined to run stateless. */
+  sessionId?: (scope: CopilotScope, turn: number) => string | undefined
+  /** Turns to keep in one kimi session before rotating (defaults to GROVE_KIMI_SESSION_TURNS, or 1). */
+  sessionTurns?: number
+  /** Process spawner, injectable so tests can capture the kimi argv. */
+  spawn?: typeof spawn
+}
+
+/**
+ * How many turns share one kimi session before it rotates. kimi resumes a persistent session
+ * per id and re-sends its whole history each turn, so a long-lived session grows input tokens
+ * unboundedly (≈ O(N²) over a conversation). `1` (the default) keeps every turn stateless and
+ * bounded; cross-turn context comes from Grove's journal/notes and the "Reference history"
+ * toggle, not kimi's session. Set GROVE_KIMI_SESSION_TURNS>1 for a short rolling window.
+ */
+function sessionTurnsFromEnv() {
+  return Math.max(1, Math.trunc(Number(envValue('GROVE_KIMI_SESSION_TURNS'))) || 1)
 }
 
 /**
@@ -22,15 +40,31 @@ export class PrintDriver implements CopilotDriver {
   private readonly binary: string
   private readonly model?: string
   private readonly configFile?: string
-  private readonly sessionId: (scope: CopilotScope) => string
+  private readonly sessionId: (scope: CopilotScope, turn: number) => string | undefined
+  private readonly sessionTurns: number
+  private readonly turnsByScope = new Map<CopilotScope, number>()
+  private readonly spawnProcess: typeof spawn
   private readonly active = new Map<CopilotScope, ReturnType<typeof spawn>>()
   private lastError?: string
 
   constructor(options: PrintDriverOptions = {}) {
-    this.binary = options.binary ?? process.env.GROVE_KIMI_BIN ?? 'kimi'
+    this.binary = options.binary ?? kimiBinaryFromEnv()
     this.model = options.model
     this.configFile = options.configFile
-    this.sessionId = options.sessionId ?? ((scope) => `grove-${scope.replace(/[^a-zA-Z0-9_-]/g, '-')}`)
+    this.spawnProcess = options.spawn ?? spawn
+    this.sessionTurns = options.sessionTurns ?? sessionTurnsFromEnv()
+    // Default: stateless when sessionTurns<=1 (no --session, fresh one-shot each turn), else a
+    // session id that rotates every `sessionTurns` turns. The `-ui1` suffix namespaces it to the
+    // current operator-brief guidance so older sessions never re-entrench stale output formats.
+    this.sessionId =
+      options.sessionId ??
+      ((scope, turn) => {
+        if (this.sessionTurns <= 1) {
+          return undefined
+        }
+        const epoch = Math.floor((turn - 1) / this.sessionTurns)
+        return `grove-${scope.replace(/[^a-zA-Z0-9_-]/g, '-')}-ui1-e${epoch}`
+      })
   }
 
   async start() {
@@ -38,6 +72,10 @@ export class PrintDriver implements CopilotDriver {
   }
 
   prompt(request: PromptRequest): Promise<PromptResult> {
+    const turn = (this.turnsByScope.get(request.scope) ?? 0) + 1
+    this.turnsByScope.set(request.scope, turn)
+    const sessionId = this.sessionId(request.scope, turn)
+
     const args = [
       '--print',
       '--output-format',
@@ -47,9 +85,11 @@ export class PrintDriver implements CopilotDriver {
       request.cwd,
       '--mcp-config-file',
       request.mcp.configPath,
-      '--session',
-      this.sessionId(request.scope),
     ]
+    // Stateless turns omit --session so kimi runs a fresh one-shot and never re-sends history.
+    if (sessionId) {
+      args.push('--session', sessionId)
+    }
     if (this.configFile) {
       args.push('--config-file', this.configFile)
     }
@@ -58,11 +98,12 @@ export class PrintDriver implements CopilotDriver {
     }
     args.push('--prompt', request.message)
 
-    const child = spawn(this.binary, args, { cwd: request.cwd, env: process.env })
+    const child = this.spawnProcess(this.binary, args, { cwd: request.cwd, env: kimiSpawnEnv() })
     this.active.set(request.scope, child)
 
     let finalText = ''
     let deltaText = ''
+    let launchFailed = false
     const stderrChunks: string[] = []
 
     const stdout = createInterface({ input: child.stdout })
@@ -85,12 +126,16 @@ export class PrintDriver implements CopilotDriver {
 
     return new Promise<PromptResult>((resolve) => {
       child.on('error', (error) => {
-        this.lastError = error.message
+        launchFailed = true
+        this.lastError = formatKimiLaunchError(error, this.binary)
         this.active.delete(request.scope)
-        resolve({ text: `Failed to launch kimi: ${error.message}`, stopReason: 'error' })
+        resolve({ text: this.lastError, stopReason: 'error' })
       })
       child.on('close', (code) => {
         this.active.delete(request.scope)
+        if (launchFailed) {
+          return
+        }
         const text = finalText || deltaText
         if (!text && code !== 0) {
           const detail = stderrChunks.join('').trim().slice(0, 500)
@@ -98,6 +143,7 @@ export class PrintDriver implements CopilotDriver {
           resolve({ text: `kimi exited with code ${code}. ${detail}`.trim(), stopReason: 'error' })
           return
         }
+        this.lastError = undefined
         resolve({ text: text || 'No response produced.', stopReason: code === 0 ? 'end_turn' : 'error' })
       })
     })
@@ -120,7 +166,7 @@ export class PrintDriver implements CopilotDriver {
     return {
       driver: 'print',
       state: this.lastError ? 'error' : 'ready',
-      detail: this.lastError ?? 'kimi print-mode driver (per-turn).',
+      detail: this.lastError ?? `kimi print-mode driver (per-turn). Binary: ${this.binary}`,
       model: this.model,
     }
   }
