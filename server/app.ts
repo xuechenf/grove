@@ -1,5 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from 'express'
+import { existsSync } from 'node:fs'
 import { isIP } from 'node:net'
+import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import type {
   ActionProposal,
@@ -135,6 +137,12 @@ function requireParam(value: string | string[] | undefined, name: string) {
 export interface CreateGroveAppOptions {
   /** When set, mutating routes require this token in the x-grove-token header. */
   uiToken?: string
+  /**
+   * When set to a directory containing a built Vite UI (an `index.html`), the app serves it as
+   * static files with an SPA fallback. Lets the packaged desktop app load the UI from the same
+   * origin as the API, so the frontend's relative `/api` and same-origin WebSocket URLs just work.
+   */
+  staticDir?: string
 }
 
 export function createGroveApp(store = new GroveStore(), options: CreateGroveAppOptions = {}) {
@@ -360,6 +368,19 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
       response.json(await store.decideProposal(requireParam(request.params.proposalId, 'proposalId'), 'allow_once'))
     }),
   )
+
+  // Serve the built UI (packaged desktop app) from the same origin as the API. Mounted after
+  // the API routes so `/api/*` always wins; the SPA fallback only answers non-API GET requests,
+  // leaving unknown `/api/*` paths to 404 as JSON. GET is already exempt from the UI-token gate.
+  if (options.staticDir && existsSync(join(options.staticDir, 'index.html'))) {
+    // Resolve to absolute: express.static would otherwise resolve against cwd, and res.sendFile
+    // rejects relative paths outright.
+    const staticDir = resolve(options.staticDir)
+    app.use(express.static(staticDir))
+    app.get(/^\/(?!api\/).*/, (_request, response) => {
+      response.sendFile(join(staticDir, 'index.html'))
+    })
+  }
 
   app.use((error: unknown, _request: Request, response: Response, next: NextFunction) => {
     void next

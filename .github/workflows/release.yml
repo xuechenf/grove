@@ -1,0 +1,54 @@
+name: Release
+
+# Build the desktop app on each platform's own runner (electron-builder can't cross-compile a
+# macOS app from Windows/Linux) and publish the installers to a GitHub Release. Triggered by a
+# version tag, or manually for a dry run.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write # electron-builder creates/updates the GitHub Release
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build app (UI + Electron bundle)
+        run: npm run build:app
+
+      - name: Build installers
+        # On a version tag, publish straight to the GitHub Release; on a manual run, just build
+        # (artifacts are uploaded below) so dispatches don't create stray draft releases.
+        run: npx --no-install electron-builder --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No Apple certificate yet — skip code signing so macOS builds don't fail.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload installers as workflow artifacts (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: grove-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: ignore

@@ -1,0 +1,46 @@
+appId: dev.grove.app
+productName: Grove
+directories:
+  output: release
+  buildResources: build
+# Override package.json so the packaged app boots the bundled Electron entry, not server/index.
+extraMetadata:
+  main: dist-electron/main.cjs
+# Grove has no native module it actually needs: ssh2 is pure JS and only *optionally* uses
+# cpu-features (guarded by try/catch), ws optionally uses bufferutil/utf-8-validate. Rebuilding
+# those against Electron's V8 fails (cpu-features' bundled nan is too old) and buys nothing, so
+# skip the native rebuild and drop the optional addons from the package entirely.
+npmRebuild: false
+files:
+  - dist/**          # built Vite UI, served same-origin by the backend
+  - dist-electron/** # bundled Electron main + preload (+ backend)
+  - package.json
+  - '!**/node_modules/cpu-features/**'
+  - '!**/node_modules/nan/**'
+  - '!**/node_modules/bufferutil/**'
+  - '!**/node_modules/utf-8-validate/**'
+# Keep any remaining native addons unpacked so require() can load them from outside the asar.
+asarUnpack:
+  - '**/*.node'
+publish:
+  provider: github
+  owner: xuechenf
+  repo: grove
+win:
+  target:
+    - nsis
+    - portable
+  icon: build/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  # Unsigned for now; CI also sets CSC_IDENTITY_AUTO_DISCOVERY=false. Add a signing identity here
+  # (plus notarization) once an Apple Developer certificate is available.
+  identity: null
