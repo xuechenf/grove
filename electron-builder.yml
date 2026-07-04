@@ -26,6 +26,7 @@ publish:
   provider: github
   owner: xuechenf
   repo: grove
+  releaseType: release
 win:
   target:
     - nsis
