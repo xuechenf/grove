@@ -12,6 +12,8 @@ dist
 dist-ssr
 dist-electron
 release
+release-*
+/index-*.js
 coverage
 .cache
 .vite

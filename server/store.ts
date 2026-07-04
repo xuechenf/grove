@@ -36,12 +36,10 @@ import { CopilotPolicy } from './copilotPolicy'
 import { CopilotSupervisor } from './copilotSupervisor'
 import type { CopilotDriver, CopilotToolHost, DriverUpdate, ToolResult } from './copilotTypes'
 import {
-  DEFAULT_MOONSHOT_BASE_URL,
-  DEFAULT_MOONSHOT_MODEL,
-  moonshotConfigFromEnv,
-  type MoonshotConfig,
+  copilotProviderStatusFromEnv,
+  type CopilotProviderConfig,
 } from './copilotProvider'
-import { envFlag, envValue, saveMoonshotLocalEnv } from './env'
+import { envFlag, envValue, saveCopilotProviderLocalEnv } from './env'
 import { loadInventory, saveInventory, vmFromConfig } from './inventory'
 import { ScopeTokenRegistry } from './mcp/endpoint'
 import { KeyedMutex } from './mutationLock'
@@ -823,12 +821,7 @@ export class GroveStore implements CopilotToolHost {
   }
 
   copilotProviderStatus() {
-    return {
-      provider: 'moonshot' as const,
-      configured: Boolean(moonshotConfigFromEnv()),
-      baseUrl: envValue('GROVE_MOONSHOT_BASE_URL') ?? DEFAULT_MOONSHOT_BASE_URL,
-      model: envValue('GROVE_MOONSHOT_MODEL') ?? DEFAULT_MOONSHOT_MODEL,
-    }
+    return copilotProviderStatusFromEnv()
   }
 
   copilotRuntimeStatus(): CopilotRuntimeStatus {
@@ -881,8 +874,12 @@ export class GroveStore implements CopilotToolHost {
     return this.supervisor.workspaceDir(scope)
   }
 
-  configureCopilotProvider(input: MoonshotConfig) {
-    saveMoonshotLocalEnv(input)
+  setCopilotBackendUrl(url: string) {
+    this.supervisor.setBackendUrl(url)
+  }
+
+  configureCopilotProvider(input: CopilotProviderConfig) {
+    saveCopilotProviderLocalEnv(input)
     return this.copilotProviderStatus()
   }
 

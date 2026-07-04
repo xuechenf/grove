@@ -6,6 +6,7 @@ import type {
   CommandRun,
   CopilotInstallState,
   CopilotPermissionDecision,
+  CopilotProvider,
   CopilotProviderStatus,
   CopilotRuntimeStatus,
   CopilotScope,
@@ -212,7 +213,7 @@ export function getCopilotProvider() {
   return requestJson<CopilotProviderStatus>('/api/copilot/provider')
 }
 
-export function saveCopilotProvider(input: { apiKey: string; baseUrl: string; model: string }) {
+export function saveCopilotProvider(input: { provider: CopilotProvider; apiKey: string; baseUrl: string; model: string }) {
   return requestJson<CopilotProviderStatus>('/api/copilot/provider', {
     method: 'POST',
     body: JSON.stringify(input),

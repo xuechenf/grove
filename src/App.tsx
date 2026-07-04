@@ -19,6 +19,7 @@ import { AppRunnerTab } from './components/AppRunnerTab'
 import { CopilotPanel } from './components/CopilotPanel'
 import { FilesTab } from './components/FilesTab'
 import { FleetOverviewTab } from './components/FleetOverviewTab'
+import { GeneralSettingsPanel, type AppTheme } from './components/GeneralSettingsPanel'
 import { IconButton } from './components/IconButton'
 import { LifecycleControls } from './components/LifecycleControls'
 import { OverviewTab } from './components/OverviewTab'
@@ -74,6 +75,7 @@ import type {
   CopilotInstallState,
   CopilotPermissionDecision,
   CopilotPlanState,
+  CopilotProvider,
   CopilotProviderStatus,
   CopilotProgressEvent,
   CopilotRuntimeStatus,
@@ -118,6 +120,25 @@ const initialProviderStatus: CopilotProviderStatus = {
   configured: false,
   baseUrl: 'https://api.moonshot.cn/v1',
   model: 'kimi-k2.6',
+}
+
+const THEME_STORAGE_KEY = 'grove-theme'
+
+function isAppTheme(value: string | null): value is AppTheme {
+  return value === 'system' || value === 'light' || value === 'dark'
+}
+
+function initialTheme(): AppTheme {
+  if (typeof window === 'undefined') {
+    return 'system'
+  }
+
+  try {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY)
+    return isAppTheme(saved) ? saved : 'system'
+  } catch {
+    return 'system'
+  }
 }
 
 interface ConflictState {
@@ -388,6 +409,7 @@ function App() {
   const [copilotRuntime, setCopilotRuntime] = useState<CopilotRuntimeStatus>({ driver: 'mock', state: 'disabled' })
   const [copilotInstall, setCopilotInstall] = useState<CopilotInstallState>({ status: 'idle', log: '' })
   const [providerStatus, setProviderStatus] = useState<CopilotProviderStatus>(initialProviderStatus)
+  const [theme, setTheme] = useState<AppTheme>(initialTheme)
   const deltaBufferRef = useRef<Map<string, string>>(new Map())
   const deltaFrameRef = useRef<number | null>(null)
   const [pendingAction, setPendingAction] = useState<VMAction | null>(null)
@@ -397,6 +419,34 @@ function App() {
   const [infoPanelPercent, setInfoPanelPercent] = useState(DEFAULT_INFO_PANEL_PERCENT)
   const [isResizingInfoPanel, setIsResizingInfoPanel] = useState(false)
   const workspaceSplitRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined
+    }
+
+    const media = window.matchMedia?.('(prefers-color-scheme: dark)')
+
+    const applyTheme = () => {
+      const resolvedTheme = theme === 'system' && media?.matches ? 'dark' : theme === 'dark' ? 'dark' : 'light'
+      document.documentElement.dataset.groveTheme = resolvedTheme
+      document.documentElement.style.colorScheme = resolvedTheme
+    }
+
+    applyTheme()
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+    } catch {
+      // Theme still applies for the current session when storage is unavailable.
+    }
+
+    if (theme !== 'system' || !media) {
+      return undefined
+    }
+
+    media.addEventListener('change', applyTheme)
+    return () => media.removeEventListener('change', applyTheme)
+  }, [theme])
 
   useEffect(() => {
     if (apiDisabled()) {
@@ -1356,9 +1406,9 @@ function App() {
     }
   }
 
-  async function saveProvider(input: { apiKey: string; baseUrl: string; model: string }) {
+  async function saveProvider(input: { provider: CopilotProvider; apiKey: string; baseUrl: string; model: string }) {
     if (apiDisabled()) {
-      setProviderStatus({ provider: 'moonshot', configured: true, baseUrl: input.baseUrl, model: input.model })
+      setProviderStatus({ provider: input.provider, configured: true, baseUrl: input.baseUrl, model: input.model })
       return
     }
 
@@ -1658,12 +1708,9 @@ function App() {
                 </Tabs.Content>
                 <Tabs.Content value="settings" className="outline-none">
                   <SettingsTab
-                    key={`${providerStatus.configured}-${providerStatus.baseUrl}-${providerStatus.model}`}
                     vm={selectedVm}
-                    providerStatus={providerStatus}
                     onTestConnection={testConnection}
                     onEditVm={() => setVmEditorMode('edit')}
-                    onSaveProvider={saveProvider}
                   />
                 </Tabs.Content>
               </div>
@@ -1679,6 +1726,13 @@ function App() {
         </div>
         </main>
       </div>
+
+      <GeneralSettingsPanel
+        providerStatus={providerStatus}
+        theme={theme}
+        onThemeChange={setTheme}
+        onSaveProvider={saveProvider}
+      />
 
       <VmEditorDialog
         key={`${vmEditorMode ?? 'closed'}-${selectedVm?.id ?? 'none'}`}

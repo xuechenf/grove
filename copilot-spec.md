@@ -58,7 +58,7 @@ timeline. The UI keys messages, tool calls, proposals, progress, and busy state 
 - MCP layer: `server/mcp/tools.ts` (scoped tool registry), `server/mcp/endpoint.ts`
   (HTTP endpoint + `ScopeTokenRegistry`), `server/mcp/groveStdioProxy.mjs` (stdio bridge
   kimi spawns).
-- Provider/config: `server/copilotProvider.ts` — Moonshot env + generated kimi config file.
+- Provider/config: `server/copilotProvider.ts` — Moonshot/GLM-CN env + generated kimi config file.
 - Safety: `server/commandProfiles.ts` — `classifyCommand`, `isReadOnlyCommand`,
   `readOnlyCommandPrefixes`.
 - Policy: `server/copilotPolicy.ts` — "always allow" rules.
@@ -81,13 +81,14 @@ The supervisor talks to one `CopilotDriver`. Selection (`server/copilotSuperviso
   needs `kimi login` or a config providing credentials).
 - default → **PrintDriver**: `kimi --print --output-format stream-json --yolo --work-dir
   <scope-workspace> --mcp-config-file <scope-mcp.json> --session <scope> --config-file
-  <grove-kimi-config>`. Works non-interactively with the saved Moonshot key, no global login.
+  <grove-kimi-config>`. Works non-interactively with the saved provider key, no global login.
 
 The default is print mode because it runs with the user's saved key via a Grove-local config
-file (`.grove/runtime/kimi-config.toml`, generated from `GROVE_MOONSHOT_*`, never committed,
-never put in any agent-readable workspace). `--yolo` auto-approves kimi's *built-in* tools
-only; Grove's MCP layer still gates every mutating VM command. ACP is available for warm,
-streamed, cancellable turns once the user has logged kimi in.
+file (`.grove/runtime/kimi-config.toml`, generated from `GROVE_COPILOT_*` with legacy
+`GROVE_MOONSHOT_*` fallback, never committed, never put in any agent-readable workspace).
+`--yolo` auto-approves kimi's *built-in* tools only; Grove's MCP layer still gates every
+mutating VM command. ACP is available for warm, streamed, cancellable turns once the user
+has logged kimi in.
 
 `DriverUpdate` values (`message_delta`, `thought`, `tool_call`, `plan`, `progress`) are the
 common stream the store translates into Grove events regardless of driver.
@@ -286,7 +287,7 @@ HTTP:
 - `POST /api/copilot/proposals` — suggestion-button proposal `{ vmId, activeTab, actionType }`.
 - `POST /api/copilot/proposals/:id/decision` — `{ decision }`.
 - `POST /api/copilot/proposals/:id/confirm` — `allow_once` alias.
-- `GET /api/copilot/provider`, `POST /api/copilot/provider` — Moonshot key (passed to kimi).
+- `GET /api/copilot/provider`, `POST /api/copilot/provider` — provider key/config (passed to kimi).
 - `GET /api/mcp/tools`, `POST /api/mcp/call` — scope-token-authenticated MCP endpoint.
 
 WebSocket: `WS /api/events` (adds `copilot.delta`, `copilot.toolcall.updated`,
@@ -301,7 +302,7 @@ When changing a public interface, update together: `src/types.ts`, `src/lib/api.
   patterns; `isReadOnlyCommand` requires both non-mutating classification and an approved
   prefix from `readOnlyCommandPrefixes`. Treat changes here as security-sensitive.
 - Mutating commands always require explicit confirmation (or a stored always-allow rule).
-- Free-form chat needs a configured Moonshot key (for kimi) or kimi login; without it the
+- Free-form chat needs a configured provider key (for kimi) or kimi login; without it the
   driver surfaces an error state instead of inventing a local answer mode.
 - The kimi config file embeds the API key and lives only under gitignored `.grove/runtime/`.
 

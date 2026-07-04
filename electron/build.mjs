@@ -1,5 +1,6 @@
 import { build } from 'esbuild'
-import { rmSync } from 'node:fs'
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 
 // Bundle the Electron main + preload (and, through main, the whole backend) into dist-electron/.
 // Output is CJS with a .cjs extension because the package is `"type": "module"` — without the
@@ -26,3 +27,6 @@ await build({
   external: ['electron', 'ssh2', 'cpu-features', 'bufferutil', 'utf-8-validate'],
   logLevel: 'info',
 })
+
+mkdirSync(join(outdir, 'mcp'), { recursive: true })
+copyFileSync('server/mcp/groveStdioProxy.mjs', join(outdir, 'mcp', 'groveStdioProxy.mjs'))

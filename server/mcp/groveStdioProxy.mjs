@@ -99,9 +99,16 @@ async function handle(message) {
     }
   } catch (error) {
     const text = error instanceof Error ? error.message : 'Grove MCP proxy error.'
-    if (isRequest) {
-      reply(id, { content: [{ type: 'text', text }], isError: true })
+    if (!isRequest) {
+      return
     }
+
+    if (method === 'tools/call') {
+      reply(id, { content: [{ type: 'text', text }], isError: true })
+      return
+    }
+
+    replyError(id, -32000, text)
   }
 }
 

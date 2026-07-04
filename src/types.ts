@@ -313,8 +313,10 @@ export interface CopilotPlanState {
 
 export type CopilotPermissionDecision = 'allow_once' | 'always_allow' | 'deny'
 
+export type CopilotProvider = 'moonshot' | 'glm-cn'
+
 export interface CopilotProviderStatus {
-  provider: 'moonshot'
+  provider: CopilotProvider
   configured: boolean
   baseUrl: string
   model: string

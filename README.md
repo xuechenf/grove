@@ -57,18 +57,21 @@ tools — kimi never holds SSH keys or opens its own connection. The left invent
 **All VMs** entry (fleet context) plus one entry per VM (focused context); each scope has its
 own conversation, history, and tools.
 
-Configure the Moonshot/Kimi key from the Settings tab or by creating `.grove/.env.local`:
+Configure the provider from the bottom-left Grove settings button or by creating
+`.grove/.env.local`:
 
 ```bash
-GROVE_MOONSHOT_API_KEY=...
-GROVE_MOONSHOT_BASE_URL=https://api.moonshot.cn/v1
-GROVE_MOONSHOT_MODEL=kimi-k2.6
+GROVE_COPILOT_PROVIDER=moonshot # moonshot or glm-cn
+GROVE_COPILOT_API_KEY=...
+GROVE_COPILOT_BASE_URL=https://api.moonshot.cn/v1
+GROVE_COPILOT_MODEL=kimi-k2.6
 ```
 
 Grove writes a kimi config from these values to `.grove/runtime/kimi-config.toml` (gitignored)
 so kimi runs non-interactively with your key — no separate `kimi login` needed. Set
 `GROVE_COPILOT_DRIVER=acp` to use the warm `kimi acp` server instead of per-turn print mode
-(ACP needs `kimi login` or the generated config).
+(ACP needs `kimi login` or the generated config). Existing `GROVE_MOONSHOT_*` env values are
+still accepted as a Moonshot fallback.
 
 Read-only inspections run immediately. Mutating commands pause for an explicit Allow once /
 Always allow / Deny confirmation before they execute, and the agent sees the result in the

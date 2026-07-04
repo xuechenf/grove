@@ -1,35 +1,97 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import type { CopilotProvider } from '../src/types'
 import { envValue } from './env'
 import { projectStatePath } from './projectState'
 
 /**
- * Moonshot/Kimi provider configuration. Grove no longer calls the Moonshot API directly —
- * kimi-code CLI does — but Grove still owns the key so it can render provider status in
- * Settings and pass the model name through to the kimi drivers.
+ * Copilot provider configuration. Grove no longer calls the model API directly — kimi-code CLI
+ * does — but Grove still owns the key so it can render provider status in Settings and write a
+ * project-local kimi config for non-interactive runs.
  */
 export const DEFAULT_MOONSHOT_BASE_URL = 'https://api.moonshot.cn/v1'
 export const DEFAULT_MOONSHOT_MODEL = 'kimi-k2.6'
+export const DEFAULT_GLM_CN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4'
+export const DEFAULT_GLM_CN_MODEL = 'glm-5.2'
 
-export interface MoonshotConfig {
+export interface CopilotProviderConfig {
+  provider: CopilotProvider
   apiKey: string
   baseUrl: string
   model: string
 }
 
-function apiKeyFromEnv() {
-  return envValue('GROVE_MOONSHOT_API_KEY') ?? process.env.MOONSHOT_API_KEY
+const providerDefaults: Record<CopilotProvider, { baseUrl: string; model: string; kimiType: 'kimi' | 'openai' }> = {
+  moonshot: {
+    baseUrl: DEFAULT_MOONSHOT_BASE_URL,
+    model: DEFAULT_MOONSHOT_MODEL,
+    kimiType: 'kimi',
+  },
+  'glm-cn': {
+    baseUrl: DEFAULT_GLM_CN_BASE_URL,
+    model: DEFAULT_GLM_CN_MODEL,
+    kimiType: 'openai',
+  },
 }
 
-export function moonshotConfigFromEnv(): MoonshotConfig | undefined {
-  const apiKey = apiKeyFromEnv()
+function normalizeProvider(value: string | undefined): CopilotProvider | undefined {
+  return value === 'moonshot' || value === 'glm-cn' ? value : undefined
+}
+
+function providerFromEnv(): CopilotProvider {
+  return normalizeProvider(envValue('GROVE_COPILOT_PROVIDER')) ?? 'moonshot'
+}
+
+function apiKeyFromEnv(provider: CopilotProvider) {
+  const generic = envValue('GROVE_COPILOT_API_KEY')
+  if (generic) {
+    return generic
+  }
+
+  if (provider === 'moonshot') {
+    return envValue('GROVE_MOONSHOT_API_KEY') ?? process.env.MOONSHOT_API_KEY
+  }
+
+  return undefined
+}
+
+export function copilotProviderDefaults(provider: CopilotProvider) {
+  const defaults = providerDefaults[provider]
+  return {
+    baseUrl: defaults.baseUrl,
+    model: defaults.model,
+  }
+}
+
+export function copilotProviderStatusFromEnv() {
+  const provider = providerFromEnv()
+  const legacyMoonshot = !envValue('GROVE_COPILOT_PROVIDER') && provider === 'moonshot'
+  const defaults = providerDefaults[provider]
+  return {
+    provider,
+    configured: Boolean(apiKeyFromEnv(provider)),
+    baseUrl:
+      envValue('GROVE_COPILOT_BASE_URL') ??
+      (legacyMoonshot ? envValue('GROVE_MOONSHOT_BASE_URL') : undefined) ??
+      defaults.baseUrl,
+    model:
+      envValue('GROVE_COPILOT_MODEL') ??
+      (legacyMoonshot ? envValue('GROVE_MOONSHOT_MODEL') : undefined) ??
+      defaults.model,
+  }
+}
+
+export function copilotProviderConfigFromEnv(): CopilotProviderConfig | undefined {
+  const status = copilotProviderStatusFromEnv()
+  const apiKey = apiKeyFromEnv(status.provider)
   if (!apiKey) {
     return undefined
   }
 
   return {
+    provider: status.provider,
     apiKey,
-    baseUrl: envValue('GROVE_MOONSHOT_BASE_URL') ?? DEFAULT_MOONSHOT_BASE_URL,
-    model: envValue('GROVE_MOONSHOT_MODEL') ?? DEFAULT_MOONSHOT_MODEL,
+    baseUrl: status.baseUrl,
+    model: status.model,
   }
 }
 
@@ -85,33 +147,39 @@ export function kimiToolCallTimeoutMs() {
   return Math.max(60000, value)
 }
 
+function tomlString(value: string) {
+  return JSON.stringify(value)
+}
+
 /**
- * Write a Grove-local kimi config from the Moonshot env so kimi runs with the user's saved
- * key without an interactive `kimi login` and without touching their global ~/.kimi. Returns
- * the config path, or undefined when no key is configured.
+ * Write a Grove-local kimi config from the saved provider env so kimi runs with the user's key
+ * without an interactive `kimi login` and without touching their global ~/.kimi. Returns the
+ * config path, or undefined when no key is configured.
  */
 export function ensureKimiConfigFile(): string | undefined {
-  const config = moonshotConfigFromEnv()
+  const config = copilotProviderConfigFromEnv()
   if (!config) {
     return undefined
   }
 
+  const providerName = `grove-${config.provider}`
+  const provider = providerDefaults[config.provider]
   const dir = projectStatePath('runtime')
   mkdirSync(dir, { recursive: true })
   const path = projectStatePath('runtime', 'kimi-config.toml')
   const toml = [
-    `default_model = "${GROVE_KIMI_MODEL_NAME}"`,
+    `default_model = ${tomlString(GROVE_KIMI_MODEL_NAME)}`,
     'default_yolo = false',
     'telemetry = false',
     '',
-    '[providers.grove-moonshot]',
-    'type = "kimi"',
-    `base_url = "${config.baseUrl}"`,
-    `api_key = "${config.apiKey}"`,
+    `[providers.${providerName}]`,
+    `type = ${tomlString(provider.kimiType)}`,
+    `base_url = ${tomlString(config.baseUrl)}`,
+    `api_key = ${tomlString(config.apiKey)}`,
     '',
     `[models.${GROVE_KIMI_MODEL_NAME}]`,
-    'provider = "grove-moonshot"',
-    `model = "${config.model}"`,
+    `provider = ${tomlString(providerName)}`,
+    `model = ${tomlString(config.model)}`,
     `max_context_size = ${kimiMaxContextSize()}`,
     '',
     '[mcp.client]',

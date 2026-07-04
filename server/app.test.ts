@@ -9,7 +9,7 @@ import { defaultAppRunnerPath } from './appRunnerMetadata'
 import { collectLocalProjectFiles } from './localProjectFiles'
 import { GroveStore } from './store'
 import { CopilotJournal } from './copilotJournal'
-import { localEnvPath, saveMoonshotLocalEnv } from './env'
+import { localEnvPath, saveCopilotProviderLocalEnv } from './env'
 import { resolveProjectStateReference } from './projectState'
 import { MockDriver, type MockScripter } from './drivers/mockDriver'
 import { OPENUI_OPERATOR_BRIEF_PROMPT } from '../src/openui/operatorBriefPrompt'
@@ -23,6 +23,10 @@ import type {
 
 const originalStateDir = process.env.GROVE_STATE_DIR
 const originalUseFixtures = process.env.GROVE_USE_FIXTURES
+const originalCopilotProvider = process.env.GROVE_COPILOT_PROVIDER
+const originalCopilotApiKey = process.env.GROVE_COPILOT_API_KEY
+const originalCopilotBaseUrl = process.env.GROVE_COPILOT_BASE_URL
+const originalCopilotModel = process.env.GROVE_COPILOT_MODEL
 const originalMoonshotApiKey = process.env.GROVE_MOONSHOT_API_KEY
 const originalMoonshotBaseUrl = process.env.GROVE_MOONSHOT_BASE_URL
 const originalMoonshotModel = process.env.GROVE_MOONSHOT_MODEL
@@ -150,6 +154,10 @@ class AppRunnerSsh implements SshSessionManager {
 beforeEach(() => {
   delete process.env.GROVE_STATE_DIR
   process.env.GROVE_USE_FIXTURES = 'true'
+  delete process.env.GROVE_COPILOT_PROVIDER
+  delete process.env.GROVE_COPILOT_API_KEY
+  delete process.env.GROVE_COPILOT_BASE_URL
+  delete process.env.GROVE_COPILOT_MODEL
   delete process.env.GROVE_MOONSHOT_API_KEY
   delete process.env.GROVE_MOONSHOT_BASE_URL
   delete process.env.GROVE_MOONSHOT_MODEL
@@ -165,6 +173,26 @@ afterAll(() => {
     process.env.GROVE_USE_FIXTURES = originalUseFixtures
   } else {
     delete process.env.GROVE_USE_FIXTURES
+  }
+  if (originalCopilotProvider) {
+    process.env.GROVE_COPILOT_PROVIDER = originalCopilotProvider
+  } else {
+    delete process.env.GROVE_COPILOT_PROVIDER
+  }
+  if (originalCopilotApiKey) {
+    process.env.GROVE_COPILOT_API_KEY = originalCopilotApiKey
+  } else {
+    delete process.env.GROVE_COPILOT_API_KEY
+  }
+  if (originalCopilotBaseUrl) {
+    process.env.GROVE_COPILOT_BASE_URL = originalCopilotBaseUrl
+  } else {
+    delete process.env.GROVE_COPILOT_BASE_URL
+  }
+  if (originalCopilotModel) {
+    process.env.GROVE_COPILOT_MODEL = originalCopilotModel
+  } else {
+    delete process.env.GROVE_COPILOT_MODEL
   }
   if (originalMoonshotApiKey) {
     process.env.GROVE_MOONSHOT_API_KEY = originalMoonshotApiKey
@@ -563,7 +591,7 @@ vms:
     }
   })
 
-  it('saves Grove Moonshot settings in the project state directory', () => {
+  it('saves Grove copilot provider settings in the project state directory', () => {
     const originalCwd = process.cwd()
     const tempDir = mkdtempSync(join(tmpdir(), 'grove-env-'))
 
@@ -578,7 +606,8 @@ vms:
         'utf8',
       )
 
-      saveMoonshotLocalEnv({
+      saveCopilotProviderLocalEnv({
+        provider: 'glm-cn',
         apiKey: 'new-key',
         baseUrl: 'https://new.example/v1',
         model: 'new-model',
@@ -586,15 +615,53 @@ vms:
 
       const saved = readFileSync(join(tempDir, '.grove', '.env.local'), 'utf8')
       expect(saved).toContain('OTHER_VALUE=keep-me')
-      expect(saved).toContain('GROVE_MOONSHOT_API_KEY=new-key')
-      expect(saved).toContain('GROVE_MOONSHOT_BASE_URL=https://new.example/v1')
-      expect(saved).toContain('GROVE_MOONSHOT_MODEL=new-model')
+      expect(saved).toContain('GROVE_COPILOT_PROVIDER=glm-cn')
+      expect(saved).toContain('GROVE_COPILOT_API_KEY=new-key')
+      expect(saved).toContain('GROVE_COPILOT_BASE_URL=https://new.example/v1')
+      expect(saved).toContain('GROVE_COPILOT_MODEL=new-model')
     } finally {
       process.chdir(originalCwd)
       rmSync(tempDir, { recursive: true, force: true })
+      delete process.env.GROVE_COPILOT_PROVIDER
+      delete process.env.GROVE_COPILOT_API_KEY
+      delete process.env.GROVE_COPILOT_BASE_URL
+      delete process.env.GROVE_COPILOT_MODEL
       delete process.env.GROVE_MOONSHOT_API_KEY
       delete process.env.GROVE_MOONSHOT_BASE_URL
       delete process.env.GROVE_MOONSHOT_MODEL
+    }
+  })
+
+  it('saves GLM-CN copilot provider defaults through the API', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'grove-provider-'))
+
+    try {
+      process.env.GROVE_STATE_DIR = tempDir
+      const { app } = createGroveApp()
+      const response = await request(app)
+        .post('/api/copilot/provider')
+        .send({
+          provider: 'glm-cn',
+          apiKey: 'glm-key',
+        })
+        .expect(200)
+
+      expect(response.body).toEqual({
+        provider: 'glm-cn',
+        configured: true,
+        baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+        model: 'glm-5.2',
+      })
+      const saved = readFileSync(join(tempDir, '.env.local'), 'utf8')
+      expect(saved).toContain('GROVE_COPILOT_PROVIDER=glm-cn')
+      expect(saved).toContain('GROVE_COPILOT_API_KEY=glm-key')
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+      delete process.env.GROVE_STATE_DIR
+      delete process.env.GROVE_COPILOT_PROVIDER
+      delete process.env.GROVE_COPILOT_API_KEY
+      delete process.env.GROVE_COPILOT_BASE_URL
+      delete process.env.GROVE_COPILOT_MODEL
     }
   })
 

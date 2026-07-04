@@ -5,7 +5,12 @@ import type { CopilotRuntimeStatus, CopilotScope, VM } from '../src/types'
 import { scopeVmId } from '../src/types'
 import { OPENUI_OPERATOR_BRIEF_PROMPT } from '../src/openui/operatorBriefPrompt'
 import type { CopilotDriver, CopilotToolHost, DriverUpdate, McpServerSpec } from './copilotTypes'
-import { GROVE_KIMI_MODEL_NAME, ensureKimiConfigFile, kimiToolCallTimeoutMs } from './copilotProvider'
+import {
+  GROVE_KIMI_MODEL_NAME,
+  copilotProviderStatusFromEnv,
+  ensureKimiConfigFile,
+  kimiToolCallTimeoutMs,
+} from './copilotProvider'
 import { AcpDriver } from './drivers/acpDriver'
 import { MockDriver } from './drivers/mockDriver'
 import { PrintDriver } from './drivers/printDriver'
@@ -13,12 +18,29 @@ import { envFlag, envValue } from './env'
 import { ScopeTokenRegistry } from './mcp/endpoint'
 import { projectStatePath } from './projectState'
 
-function resolveProxyPath() {
+export function resolveProxyPath(): string {
+  const candidates =
+    typeof __dirname === 'string'
+      ? [join(__dirname, 'mcp', 'groveStdioProxy.mjs')]
+      : []
+
   try {
-    return fileURLToPath(new URL('./mcp/groveStdioProxy.mjs', import.meta.url))
+    candidates.push(fileURLToPath(new URL('./mcp/groveStdioProxy.mjs', import.meta.url)))
   } catch {
-    return join(process.cwd(), 'server', 'mcp', 'groveStdioProxy.mjs')
+    // In the esbuild CJS bundle, import.meta.url is unavailable; __dirname handles that case.
   }
+
+  candidates.push(join(process.cwd(), 'server', 'mcp', 'groveStdioProxy.mjs'))
+
+  return (
+    candidates.find((candidate) => existsSync(candidate)) ??
+    candidates[0] ??
+    join(process.cwd(), 'server', 'mcp', 'groveStdioProxy.mjs')
+  )
+}
+
+export function mcpProxyLaunchEnv(baseEnv: Record<string, string>, versions: Partial<NodeJS.ProcessVersions> = process.versions) {
+  return versions.electron ? { ...baseEnv, ELECTRON_RUN_AS_NODE: '1' } : baseEnv
 }
 
 export interface CopilotSupervisorOptions {
@@ -40,7 +62,7 @@ export class CopilotSupervisor {
   readonly tokens: ScopeTokenRegistry
   private readonly driver: CopilotDriver
   private readonly host: CopilotToolHost
-  private readonly backendUrl: string
+  private backendUrl: string
   private readonly rootDir: string
   private readonly preparedScopes = new Set<CopilotScope>()
 
@@ -64,6 +86,10 @@ export class CopilotSupervisor {
 
   driverName() {
     return this.driver.name
+  }
+
+  setBackendUrl(url: string) {
+    this.backendUrl = url
   }
 
   async prompt(scope: CopilotScope, message: string, onUpdate: (update: DriverUpdate) => void) {
@@ -114,11 +140,11 @@ export class CopilotSupervisor {
     const token = this.tokens.tokenForScope(scope)
     // The proxy's HTTP wait must outlast kimi's tool-call timeout, so it never gives up on a
     // long (but legitimately running) backend call before kimi would.
-    const env = {
+    const env = mcpProxyLaunchEnv({
       GROVE_MCP_URL: this.backendUrl,
       GROVE_MCP_SCOPE_TOKEN: token,
       GROVE_MCP_PROXY_TIMEOUT_MS: String(kimiToolCallTimeoutMs() + 60000),
-    }
+    })
     const configDir = join(this.rootDir, 'mcp')
     mkdirSync(configDir, { recursive: true })
     const configPath = join(configDir, `${scope.replace(/[^a-zA-Z0-9_-]/g, '-')}.json`)
@@ -219,10 +245,10 @@ function defaultDriver(): CopilotDriver {
     return new MockDriver()
   }
 
-  // A Grove-local kimi config lets kimi run with the user's saved Moonshot key, no global
+  // A Grove-local kimi config lets kimi run with the user's saved provider key, no global
   // `kimi login`. When present we use the model name from that config.
   const configFile = ensureKimiConfigFile()
-  const model = configFile ? GROVE_KIMI_MODEL_NAME : envValue('GROVE_MOONSHOT_MODEL')
+  const model = configFile ? GROVE_KIMI_MODEL_NAME : copilotProviderStatusFromEnv().model
 
   if (explicit === 'acp') {
     return new AcpDriver({ model })

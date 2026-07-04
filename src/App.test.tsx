@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { CopilotPanel } from './components/CopilotPanel'
 
@@ -15,6 +15,12 @@ function setup() {
 async function openOrchid(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: /Select orchid-build-01/i }))
 }
+
+beforeEach(() => {
+  window.localStorage.clear()
+  document.documentElement.removeAttribute('data-grove-theme')
+  document.documentElement.style.colorScheme = ''
+})
 
 describe('Grove VM console', () => {
   it('renders the VM inventory and switches selected VM context', async () => {
@@ -167,6 +173,24 @@ describe('Grove VM console', () => {
 
     expect(screen.getByText('2200')).toBeInTheDocument()
     expect(screen.getByText('keys/edge-updated.pem')).toBeInTheDocument()
+  })
+
+  it('opens grove settings for copilot provider and theme', async () => {
+    const { user } = setup()
+
+    await user.click(screen.getByRole('button', { name: 'Open Grove settings' }))
+    const dialog = screen.getByRole('dialog', { name: 'Grove settings' })
+
+    await user.click(within(dialog).getByRole('button', { name: /GLM-CN/i }))
+    expect(within(dialog).getByLabelText('Base URL')).toHaveValue('https://open.bigmodel.cn/api/coding/paas/v4')
+    expect(within(dialog).getByLabelText('Model')).toHaveValue('glm-5.2')
+
+    await user.type(within(dialog).getByLabelText('API key'), 'glm-key')
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }))
+    expect(await within(dialog).findByText('GLM-CN provider saved.')).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: 'Dark' }))
+    await waitFor(() => expect(document.documentElement.dataset.groveTheme).toBe('dark'))
   })
 
   it('focuses copilot on a VM and resolves a pending action', async () => {

@@ -71,7 +71,8 @@ function installEnv(platform: NodeJS.Platform, home: string): NodeJS.ProcessEnv 
   const current = process.env.PATH ?? ''
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: [...extra, current].filter(Boolean).join(delimiter) }
   // Least privilege: the remote installer shell and uv don't need Grove's secrets. kimi receives
-  // the Moonshot key via its generated config file, never the environment, so strip it here.
+  // the provider key via its generated config file, never the environment, so strip it here.
+  delete env.GROVE_COPILOT_API_KEY
   delete env.GROVE_MOONSHOT_API_KEY
   delete env.MOONSHOT_API_KEY
   // Force UTF-8 stdio so non-ASCII install output (errors, progress glyphs) doesn't render as

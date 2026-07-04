@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_KIMI_MAX_CONTEXT,
   DEFAULT_KIMI_MAX_STEPS,
@@ -16,16 +16,32 @@ const saved = {
   maxContext: process.env.GROVE_KIMI_MAX_CONTEXT,
   maxSteps: process.env.GROVE_KIMI_MAX_STEPS,
   toolTimeout: process.env.GROVE_KIMI_TOOL_TIMEOUT_MS,
-  apiKey: process.env.GROVE_MOONSHOT_API_KEY,
+  provider: process.env.GROVE_COPILOT_PROVIDER,
+  copilotApiKey: process.env.GROVE_COPILOT_API_KEY,
+  copilotBaseUrl: process.env.GROVE_COPILOT_BASE_URL,
+  copilotModel: process.env.GROVE_COPILOT_MODEL,
+  moonshotApiKey: process.env.GROVE_MOONSHOT_API_KEY,
   stateDir: process.env.GROVE_STATE_DIR,
 }
+
+beforeEach(() => {
+  delete process.env.GROVE_COPILOT_PROVIDER
+  delete process.env.GROVE_COPILOT_API_KEY
+  delete process.env.GROVE_COPILOT_BASE_URL
+  delete process.env.GROVE_COPILOT_MODEL
+  delete process.env.GROVE_MOONSHOT_API_KEY
+})
 
 afterEach(() => {
   for (const [key, value] of [
     ['GROVE_KIMI_MAX_CONTEXT', saved.maxContext],
     ['GROVE_KIMI_MAX_STEPS', saved.maxSteps],
     ['GROVE_KIMI_TOOL_TIMEOUT_MS', saved.toolTimeout],
-    ['GROVE_MOONSHOT_API_KEY', saved.apiKey],
+    ['GROVE_COPILOT_PROVIDER', saved.provider],
+    ['GROVE_COPILOT_API_KEY', saved.copilotApiKey],
+    ['GROVE_COPILOT_BASE_URL', saved.copilotBaseUrl],
+    ['GROVE_COPILOT_MODEL', saved.copilotModel],
+    ['GROVE_MOONSHOT_API_KEY', saved.moonshotApiKey],
     ['GROVE_STATE_DIR', saved.stateDir],
   ] as const) {
     if (value === undefined) {
@@ -67,6 +83,26 @@ describe('kimiMaxContextSize', () => {
       expect(toml).toContain('max_context_size = 80000')
       expect(toml).toContain('[loop_control]')
       expect(toml).toContain('max_steps_per_turn = 40')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('writes GLM-CN as an OpenAI-compatible kimi provider', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'grove-kimi-'))
+    try {
+      process.env.GROVE_STATE_DIR = dir
+      process.env.GROVE_COPILOT_PROVIDER = 'glm-cn'
+      process.env.GROVE_COPILOT_API_KEY = 'glm-test'
+      process.env.GROVE_COPILOT_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4'
+      process.env.GROVE_COPILOT_MODEL = 'glm-5.2'
+
+      const toml = readFileSync(ensureKimiConfigFile()!, 'utf8')
+      expect(toml).toContain('[providers.grove-glm-cn]')
+      expect(toml).toContain('type = "openai"')
+      expect(toml).toContain('base_url = "https://open.bigmodel.cn/api/coding/paas/v4"')
+      expect(toml).toContain('provider = "grove-glm-cn"')
+      expect(toml).toContain('model = "glm-5.2"')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

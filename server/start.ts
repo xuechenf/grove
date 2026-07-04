@@ -211,6 +211,7 @@ export function startGroveServer(options: StartGroveServerOptions = {}): Promise
       server.off('error', reject)
       const boundPort = (server.address() as AddressInfo).port
       const url = `http://${host}:${boundPort}`
+      store.setCopilotBackendUrl(url)
       console.log(`Grove backend listening on ${url}`)
       resolve({
         store,

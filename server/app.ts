@@ -12,6 +12,7 @@ import type {
   VmConnectionInput,
 } from '../src/types'
 import { uiTokenMiddleware } from './apiToken'
+import { copilotProviderDefaults } from './copilotProvider'
 import { listLocalFiles, localDefaults, openLocalFolder } from './localFiles'
 import { mountMcpEndpoint } from './mcp/endpoint'
 import { GroveStore } from './store'
@@ -74,9 +75,10 @@ const copilotProposalSchema = z.object({
 })
 
 const copilotProviderSchema = z.object({
+  provider: z.enum(['moonshot', 'glm-cn']).default('moonshot'),
   apiKey: z.string().min(1),
-  baseUrl: z.string().min(1).default('https://api.moonshot.cn/v1'),
-  model: z.string().min(1).default('kimi-k2.6'),
+  baseUrl: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
 })
 
 const terminalCommandSchema = z.object({
@@ -343,11 +345,13 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
 
   app.post('/api/copilot/provider', (request, response) => {
     const body = copilotProviderSchema.parse(request.body)
+    const defaults = copilotProviderDefaults(body.provider)
     response.json(
       store.configureCopilotProvider({
+        provider: body.provider,
         apiKey: body.apiKey,
-        baseUrl: body.baseUrl,
-        model: body.model,
+        baseUrl: body.baseUrl ?? defaults.baseUrl,
+        model: body.model ?? defaults.model,
       }),
     )
   })

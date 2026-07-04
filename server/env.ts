@@ -1,8 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import type { CopilotProvider } from '../src/types'
 import { projectStatePath } from './projectState'
 
-const managedMoonshotKeys = [
+const managedCopilotKeys = [
+  'GROVE_COPILOT_PROVIDER',
+  'GROVE_COPILOT_API_KEY',
+  'GROVE_COPILOT_BASE_URL',
+  'GROVE_COPILOT_MODEL',
   'GROVE_MOONSHOT_API_KEY',
   'GROVE_MOONSHOT_BASE_URL',
   'GROVE_MOONSHOT_MODEL',
@@ -62,7 +67,12 @@ function assignmentLine(key: string, value: string) {
   return `${key}=${value.replace(/\r?\n/g, '')}`
 }
 
-export function saveMoonshotLocalEnv(input: { apiKey: string; baseUrl: string; model: string }) {
+export function saveCopilotProviderLocalEnv(input: {
+  provider: CopilotProvider
+  apiKey: string
+  baseUrl: string
+  model: string
+}) {
   const path = localEnvPath()
   mkdirSync(dirname(path), { recursive: true })
   const existingLines = existsSync(path) ? readFileSync(path, 'utf8').split(/\r?\n/) : []
@@ -73,17 +83,26 @@ export function saveMoonshotLocalEnv(input: { apiKey: string; baseUrl: string; m
       return true
     }
 
-    return !managedMoonshotKeys.includes(trimmed.slice(0, separator).trim())
+    return !managedCopilotKeys.includes(trimmed.slice(0, separator).trim())
   })
   const nextLines = [
     ...preservedLines.filter((line) => line.trim()),
-    assignmentLine('GROVE_MOONSHOT_API_KEY', input.apiKey),
-    assignmentLine('GROVE_MOONSHOT_BASE_URL', input.baseUrl),
-    assignmentLine('GROVE_MOONSHOT_MODEL', input.model),
+    assignmentLine('GROVE_COPILOT_PROVIDER', input.provider),
+    assignmentLine('GROVE_COPILOT_API_KEY', input.apiKey),
+    assignmentLine('GROVE_COPILOT_BASE_URL', input.baseUrl),
+    assignmentLine('GROVE_COPILOT_MODEL', input.model),
   ]
 
   writeFileSync(path, `${nextLines.join('\n')}\n`, 'utf8')
-  process.env.GROVE_MOONSHOT_API_KEY = input.apiKey
-  process.env.GROVE_MOONSHOT_BASE_URL = input.baseUrl
-  process.env.GROVE_MOONSHOT_MODEL = input.model
+  process.env.GROVE_COPILOT_PROVIDER = input.provider
+  process.env.GROVE_COPILOT_API_KEY = input.apiKey
+  process.env.GROVE_COPILOT_BASE_URL = input.baseUrl
+  process.env.GROVE_COPILOT_MODEL = input.model
+  delete process.env.GROVE_MOONSHOT_API_KEY
+  delete process.env.GROVE_MOONSHOT_BASE_URL
+  delete process.env.GROVE_MOONSHOT_MODEL
+}
+
+export function saveMoonshotLocalEnv(input: { apiKey: string; baseUrl: string; model: string }) {
+  saveCopilotProviderLocalEnv({ provider: 'moonshot', ...input })
 }
