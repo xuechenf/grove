@@ -1,12 +1,29 @@
 # Grove
 
-Grove is a local-first VM management web app for Linux machines reachable over SSH. The React/Vite frontend talks to a local Node/TypeScript backend that owns SSH/SFTP, terminal sessions, file transfers, AppRunner deployment metadata, activity logs, and the copilot. The copilot is the center of the app: its brain is **kimi-code CLI** running locally, and it drives VM operations through Grove's scoped MCP tools.
+Grove is a local-first desktop app for managing Linux machines reachable over SSH. The React/Vite frontend talks to a local Node/TypeScript backend that owns SSH/SFTP, terminal sessions, file transfers, AppRunner deployment metadata, activity logs, and the copilot. The copilot is the center of the app: its brain is **kimi-code CLI** running locally, and it drives VM operations through Grove's scoped MCP tools.
+
+## Download
+
+Installers are published on GitHub Releases:
+
+- [Grove v0.1.0](https://github.com/xuechenf/grove/releases/tag/v0.1.0)
+- Windows: setup installer and portable `.exe`
+- macOS: `.dmg` and zipped app bundle
+
+The desktop app runs the backend locally and serves the UI from the packaged app. macOS builds are currently unsigned.
 
 ## Requirements
 
+For the desktop app:
+
+- SSH access to any VMs you want Grove to manage
+- A supported copilot provider API key: Moonshot/Kimi or GLM-CN
+- [kimi-code CLI](https://github.com/MoonshotAI/kimi-code), installable from the in-app copilot panel when missing
+
+For local development:
+
 - Node.js 22 or newer
 - npm
-- SSH access to any VMs you want Grove to manage
 - [kimi-code CLI](https://github.com/MoonshotAI/kimi-code) on `PATH` for the copilot (`uv tool install kimi-cli`)
 
 ## Run
@@ -17,6 +34,15 @@ npm run dev
 ```
 
 The backend listens on `http://127.0.0.1:8787`. Vite proxies `/api` and WebSocket traffic from the frontend.
+
+## Desktop Build
+
+```bash
+npm run dist:win  # Windows installer and portable app
+npm run dist:mac  # macOS dmg and zip, must run on macOS
+```
+
+Release publishing is handled by `.github/workflows/release.yml` when a `v*` tag is pushed. The workflow builds Windows and macOS installers on their native GitHub-hosted runners and publishes them to the GitHub Release.
 
 ## Project-Local State
 
@@ -67,6 +93,7 @@ GROVE_COPILOT_BASE_URL=https://api.moonshot.cn/v1
 GROVE_COPILOT_MODEL=kimi-k2.6
 ```
 
+Selecting GLM-CN from settings fills in its OpenAI-compatible endpoint and `glm-5.2` model defaults.
 Grove writes a kimi config from these values to `.grove/runtime/kimi-config.toml` (gitignored)
 so kimi runs non-interactively with your key — no separate `kimi login` needed. Set
 `GROVE_COPILOT_DRIVER=acp` to use the warm `kimi acp` server instead of per-turn print mode
@@ -78,6 +105,10 @@ Always allow / Deny confirmation before they execute, and the agent sees the res
 same turn. Mutating work serializes per VM, and the copilot never types into your live
 terminal.
 
+## Settings
+
+Use the bottom-left Grove settings button to configure the copilot provider and switch the app theme between system, light, and dark modes. Provider settings are saved into `.grove/.env.local`; API keys are not committed.
+
 ## Scripts
 
 ```bash
@@ -85,6 +116,8 @@ npm run dev      # backend + frontend
 npm test         # Vitest
 npm run lint     # ESLint
 npm run build    # TypeScript + production frontend build
+npm run dist:win # Windows desktop artifacts
+npm run dist:mac # macOS desktop artifacts
 ```
 
 ## Security Notes
