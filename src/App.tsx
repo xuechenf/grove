@@ -15,6 +15,8 @@ import {
 import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityTab } from './components/ActivityTab'
+import { ApplicationEditorDialog } from './components/ApplicationEditorDialog'
+import { ApplicationsWorkspace } from './components/ApplicationsWorkspace'
 import { AppRunnerTab } from './components/AppRunnerTab'
 import { CopilotPanel } from './components/CopilotPanel'
 import { FilesTab } from './components/FilesTab'
@@ -24,14 +26,19 @@ import { IconButton } from './components/IconButton'
 import { LifecycleControls } from './components/LifecycleControls'
 import { OverviewTab } from './components/OverviewTab'
 import { SettingsTab } from './components/SettingsTab'
-import { Sidebar } from './components/Sidebar'
+import { Sidebar, type OperationalSection } from './components/Sidebar'
 import { StatusPill } from './components/StatusPill'
 import { TerminalTab } from './components/TerminalTab'
 import { TransferQueue } from './components/TransferQueue'
 import { VmEditorDialog } from './components/VmEditorDialog'
 import {
   apiDisabled,
+  buildApplication,
+  applyApplicationEnvironment,
   cancelCopilot,
+  createApplication,
+  createApplicationEnvironment,
+  createCredentialProfile,
   createAppRunnerService as createAppRunnerProfile,
   createEventsSocket,
   type EventsSocketHandle,
@@ -39,23 +46,36 @@ import {
   createVm as createVmProfile,
   decideCopilotProposal,
   deleteAppRunnerService as deleteAppRunnerProfile,
+  deleteCredentialProfile,
   deleteVm,
+  deployApplication,
+  getApplicationLogs,
   getBootstrap,
   getCopilotProvider,
   getLocalDefaults,
   getSnapshot,
+  getTerraformStatus,
+  installTerraform,
   installKimiCli,
+  importAwsCredentialCsv,
   isApiUnavailableError,
   listAppRunnerServices,
+  listApplications,
   listLocalFiles,
   listRemoteFiles,
   openLocalFolder as openLocalFolderInOs,
   rebootVm,
   refreshVm,
+  relocateWorkspace,
+  planApplicationEnvironment,
   saveCopilotProvider,
   sendCopilotMessage,
   setApiToken,
+  syncApplicationSource,
+  testCredentialProfile,
   updateAppRunnerService as updateAppRunnerProfile,
+  updateApplication,
+  updateCredentialProfile,
   updateVm as updateVmProfile,
 } from './lib/api'
 import { cx } from './lib/format'
@@ -71,6 +91,13 @@ import {
 import type {
   AppRunnerService,
   AppRunnerServiceInput,
+  AwsCredentialCsvImport,
+  ApplicationEnvironmentInput,
+  GroveApplication,
+  GroveApplicationInput,
+  GroveSettings,
+  TerraformRuntimeStatus,
+  CredentialProfileInput,
   ActivityEvent,
   CopilotInstallState,
   CopilotPermissionDecision,
@@ -115,11 +142,21 @@ const fallbackLocalDefaults: LocalDefaults = {
   localFilesPath: localFiles[0]?.path ?? '.',
   pathSeparator: '/',
 }
+const fallbackGroveSettings: GroveSettings = {
+  schemaVersion: 2,
+  workspacePath: fallbackLocalDefaults.workspacePath,
+  workspaceStatus: 'healthy',
+  credentialProfiles: [],
+}
+const fallbackTerraformStatus: TerraformRuntimeStatus = {
+  available: false,
+  detail: 'Checking Terraform installation…',
+}
 const initialProviderStatus: CopilotProviderStatus = {
   provider: 'moonshot',
   configured: false,
   baseUrl: 'https://api.moonshot.cn/v1',
-  model: 'kimi-k2.6',
+  model: 'kimi-k3',
 }
 
 const THEME_STORAGE_KEY = 'grove-theme'
@@ -379,6 +416,11 @@ function applyLifecycle(vm: VM, action: VMAction): VM {
 
 function App() {
   const [vms, setVms] = useState<VM[]>(fixtureVms)
+  const [applications, setApplications] = useState<GroveApplication[]>([])
+  const [groveSettings, setGroveSettings] = useState<GroveSettings>(fallbackGroveSettings)
+  const [terraformStatus, setTerraformStatus] = useState<TerraformRuntimeStatus>(fallbackTerraformStatus)
+  const [activeSection, setActiveSection] = useState<OperationalSection>('virtual-machines')
+  const [selectedApplicationId, setSelectedApplicationId] = useState<string>()
   const [selectedVmId, setSelectedVmId] = useState<string | undefined>(fixtureVms[0]?.id)
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [selectedLocalId, setSelectedLocalId] = useState<string | undefined>(localFiles[1]?.id)
@@ -415,6 +457,8 @@ function App() {
   const [pendingAction, setPendingAction] = useState<VMAction | null>(null)
   const [conflict, setConflict] = useState<ConflictState | null>(null)
   const [vmEditorMode, setVmEditorMode] = useState<'add' | 'edit' | null>(null)
+  const [applicationEditorMode, setApplicationEditorMode] = useState<'add' | 'edit' | null>(null)
+  const [generalSettingsOpen, setGeneralSettingsOpen] = useState(false)
   const [isWorkspaceCollapsed, setIsWorkspaceCollapsed] = useState(false)
   const [infoPanelPercent, setInfoPanelPercent] = useState(DEFAULT_INFO_PANEL_PERCENT)
   const [isResizingInfoPanel, setIsResizingInfoPanel] = useState(false)
@@ -504,6 +548,8 @@ function App() {
         }
 
         setVms(snapshot.vms)
+        setApplications(snapshot.applications ?? [])
+        setGroveSettings(snapshot.settings ?? fallbackGroveSettings)
         setTransfers(snapshot.transfers)
         setMessages(snapshot.messages)
         setProposals(snapshot.proposals)
@@ -512,6 +558,11 @@ function App() {
         setCopilotRuntime(snapshot.runtime ?? { driver: 'mock', state: 'disabled' })
         setCopilotInstall(snapshot.install ?? { status: 'idle', log: '' })
         setSelectedVmId((current) => selectAvailableVm(current, snapshot.vms))
+        setSelectedApplicationId((current) =>
+          snapshot.applications?.some((application) => application.id === current)
+            ? current
+            : snapshot.applications?.[0]?.id,
+        )
       })
       .catch(() => {
         // Keep fixture state when the local backend is not running yet.
@@ -522,6 +573,14 @@ function App() {
         if (mounted) {
           setProviderStatus(status)
         }
+      })
+
+    getTerraformStatus()
+      .then((status) => {
+        if (mounted) setTerraformStatus(status)
+      })
+      .catch(() => {
+        if (mounted) setTerraformStatus({ available: false, detail: 'Terraform status is unavailable.' })
       })
       .catch(() => {
         // Provider status remains available once the backend comes online.
@@ -540,6 +599,8 @@ function App() {
       socket = createEventsSocket((event: ServerEvent) => {
         if (event.type === 'snapshot') {
           setVms(event.payload.vms)
+          setApplications(event.payload.applications ?? [])
+          setGroveSettings(event.payload.settings ?? fallbackGroveSettings)
           setTransfers(event.payload.transfers)
           setMessages(event.payload.messages)
           setProposals(event.payload.proposals)
@@ -548,6 +609,11 @@ function App() {
           setCopilotRuntime(event.payload.runtime ?? { driver: 'mock', state: 'disabled' })
           setCopilotInstall(event.payload.install ?? { status: 'idle', log: '' })
           setSelectedVmId((current) => selectAvailableVm(current, event.payload.vms))
+          setSelectedApplicationId((current) =>
+            event.payload.applications?.some((application) => application.id === current)
+              ? current
+              : event.payload.applications?.[0]?.id,
+          )
           return
         }
 
@@ -562,6 +628,42 @@ function App() {
             setSelectedVmId((selected) => (selected === event.payload.vmId ? remaining[0]?.id : selected))
             return remaining
           })
+          return
+        }
+
+        if (event.type === 'application.updated') {
+          setApplications((current) => upsertById(current, event.payload))
+          setSelectedApplicationId((current) => current ?? event.payload.id)
+          return
+        }
+
+        if (event.type === 'application.deleted') {
+          setApplications((current) => {
+            const remaining = current.filter((application) => application.id !== event.payload.applicationId)
+            setSelectedApplicationId((selected) =>
+              selected === event.payload.applicationId ? remaining[0]?.id : selected,
+            )
+            return remaining
+          })
+          return
+        }
+
+        if (event.type === 'settings.updated') {
+          setGroveSettings(event.payload)
+          return
+        }
+
+        if (event.type === 'deployment.updated') {
+          setApplications((current) =>
+            current.map((application) =>
+              application.id === event.payload.applicationId
+                ? {
+                    ...application,
+                    deployments: upsertById(application.deployments, event.payload),
+                  }
+                : application,
+            ),
+          )
           return
         }
 
@@ -628,6 +730,10 @@ function App() {
   }, [])
 
   const selectedVm = useMemo(() => vms.find((vm) => vm.id === selectedVmId), [selectedVmId, vms])
+  const selectedApplication = useMemo(
+    () => applications.find((application) => application.id === selectedApplicationId),
+    [applications, selectedApplicationId],
+  )
 
   const scopeMessages = useMemo(
     () => messages.filter((message) => (message.scope ?? 'fleet') === copilotScope),
@@ -1416,6 +1522,130 @@ function App() {
     setProviderStatus(status)
   }
 
+  async function saveApplication(input: GroveApplicationInput) {
+    if (apiDisabled()) {
+      throw new Error('Start the local Grove backend before creating applications.')
+    }
+    const application =
+      applicationEditorMode === 'edit' && selectedApplication
+        ? await updateApplication(selectedApplication.id, input)
+        : await createApplication(input)
+    setApplications((current) => upsertById(current, application))
+    setSelectedApplicationId(application.id)
+    setActiveSection('applications')
+  }
+
+  async function syncSelectedApplication() {
+    if (!selectedApplication) {
+      return
+    }
+    const application = await syncApplicationSource(selectedApplication.id)
+    setApplications((current) => upsertById(current, application))
+  }
+
+  async function buildSelectedApplication() {
+    if (!selectedApplication) {
+      return
+    }
+    await buildApplication(selectedApplication.id)
+    const refreshed = await listApplications()
+    setApplications(refreshed)
+  }
+
+  async function deploySelectedApplication(versionId: string, vmIds: string[], environment: string) {
+    if (!selectedApplication) {
+      return
+    }
+    const result = await deployApplication(selectedApplication.id, { versionId, vmIds, environment })
+    setApplications((current) => upsertById(current, result.application))
+  }
+
+  async function loadSelectedApplicationLogs(vmId: string) {
+    if (!selectedApplication) {
+      return []
+    }
+    const result = await getApplicationLogs(selectedApplication.id, vmId)
+    return result.lines
+  }
+
+  function openApplicationVm(vmId: string) {
+    setActiveSection('virtual-machines')
+    selectScope(vmScope(vmId))
+    setIsWorkspaceCollapsed(false)
+  }
+
+  async function changeWorkspaceLocation(workspacePath: string) {
+    const settings = await relocateWorkspace(workspacePath)
+    setGroveSettings(settings)
+    const refreshed = await listApplications()
+    setApplications(refreshed)
+  }
+
+  async function saveCredential(input: CredentialProfileInput, profileId?: string) {
+    const profile = profileId
+      ? await updateCredentialProfile(profileId, input)
+      : await createCredentialProfile(input)
+    setGroveSettings((current) => ({
+      ...current,
+      credentialProfiles: upsertById(current.credentialProfiles, profile),
+    }))
+  }
+
+  async function testCredential(profileId: string) {
+    const result = await testCredentialProfile(profileId)
+    setGroveSettings((current) => ({
+      ...current,
+      credentialProfiles: upsertById(current.credentialProfiles, result.profile),
+    }))
+    return result.detail
+  }
+
+  async function importAwsCredential(input: AwsCredentialCsvImport) {
+    const result = await importAwsCredentialCsv(input)
+    setGroveSettings((current) => ({
+      ...current,
+      credentialProfiles: upsertById(current.credentialProfiles, result.profile),
+    }))
+    return result.detail
+  }
+
+  async function removeCredential(profileId: string) {
+    await deleteCredentialProfile(profileId)
+    setGroveSettings((current) => ({
+      ...current,
+      credentialProfiles: current.credentialProfiles.filter((profile) => profile.id !== profileId),
+    }))
+  }
+
+  async function createEnvironment(input: ApplicationEnvironmentInput) {
+    if (!selectedApplication) return
+    const environment = await createApplicationEnvironment(selectedApplication.id, input)
+    setApplications((current) =>
+      current.map((application) =>
+        application.id === selectedApplication.id
+          ? { ...application, environments: [environment, ...application.environments] }
+          : application,
+      ),
+    )
+  }
+
+  async function installTerraformRuntime() {
+    const status = await installTerraform()
+    setTerraformStatus(status)
+  }
+
+  async function planEnvironment(environmentId: string, destroy: boolean) {
+    if (!selectedApplication) return
+    const result = await planApplicationEnvironment(selectedApplication.id, environmentId, destroy)
+    setApplications((current) => upsertById(current, result.application))
+  }
+
+  async function applyEnvironment(environmentId: string, planOperationId: string) {
+    if (!selectedApplication) return
+    const result = await applyApplicationEnvironment(selectedApplication.id, environmentId, planOperationId)
+    setApplications((current) => upsertById(current, result.application))
+  }
+
   async function saveVmProfile(input: VmConnectionInput) {
     if (vmEditorMode === 'edit') {
       if (!selectedVm) {
@@ -1513,13 +1743,46 @@ function App() {
     <div className="flex h-svh flex-col overflow-auto bg-slate-50 text-slate-900 lg:flex-row lg:overflow-hidden">
       <Sidebar
         vms={vms}
+        applications={applications}
+        activeSection={activeSection}
         activeScope={copilotScope}
+        selectedApplicationId={selectedApplicationId}
+        onSelectSection={setActiveSection}
         onSelectScope={selectScope}
+        onSelectApplication={(applicationId) => {
+          setSelectedApplicationId(applicationId)
+          setActiveSection('applications')
+        }}
         busyScopes={busyScopes}
         attentionScopes={attentionScopes}
         onAddVm={() => setVmEditorMode('add')}
+        onAddApplication={() => {
+          setActiveSection('applications')
+          setApplicationEditorMode('add')
+        }}
+        onOpenSettings={() => setGeneralSettingsOpen(true)}
       />
 
+      {activeSection === 'applications' ? (
+        <ApplicationsWorkspace
+          key={selectedApplication?.id ?? 'no-application'}
+          application={selectedApplication}
+          vms={vms}
+          credentialProfiles={groveSettings.credentialProfiles}
+          terraform={terraformStatus}
+          onInstallTerraform={installTerraformRuntime}
+          onCreate={() => setApplicationEditorMode('add')}
+          onEdit={() => setApplicationEditorMode('edit')}
+          onSync={syncSelectedApplication}
+          onBuild={buildSelectedApplication}
+          onDeploy={deploySelectedApplication}
+          onLoadLogs={loadSelectedApplicationLogs}
+          onOpenVm={openApplicationVm}
+          onCreateEnvironment={createEnvironment}
+          onPlanEnvironment={planEnvironment}
+          onApplyEnvironment={applyEnvironment}
+        />
+      ) : (
       <div
         ref={workspaceSplitRef}
         className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row"
@@ -1726,12 +1989,36 @@ function App() {
         </div>
         </main>
       </div>
+      )}
 
       <GeneralSettingsPanel
+        key={generalSettingsOpen ? 'settings-open' : 'settings-closed'}
+        open={generalSettingsOpen}
+        settings={groveSettings}
         providerStatus={providerStatus}
         theme={theme}
+        onOpenChange={setGeneralSettingsOpen}
         onThemeChange={setTheme}
+        onRelocateWorkspace={changeWorkspaceLocation}
+        onSaveCredential={saveCredential}
+        onTestCredential={testCredential}
+        onDeleteCredential={removeCredential}
+        onImportAwsCredential={importAwsCredential}
         onSaveProvider={saveProvider}
+      />
+
+      <ApplicationEditorDialog
+        key={`${applicationEditorMode ?? 'closed'}-${selectedApplication?.id ?? 'none'}`}
+        open={applicationEditorMode !== null}
+        mode={applicationEditorMode ?? 'add'}
+        application={applicationEditorMode === 'edit' ? selectedApplication : undefined}
+        defaultLocalPath={localDefaults.workspacePath}
+        onOpenChange={(open) => {
+          if (!open) {
+            setApplicationEditorMode(null)
+          }
+        }}
+        onSave={saveApplication}
       />
 
       <VmEditorDialog

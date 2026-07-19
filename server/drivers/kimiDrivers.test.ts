@@ -92,6 +92,21 @@ describe('kimi binary configuration', () => {
     expect(discovered).toBe(join('C:\\Users\\op', '.local', 'bin', 'kimi.exe'))
   })
 
+  it('prefers the system uv kimi-cli package over a legacy kimi-code binary on PATH', () => {
+    const home = 'C:\\Users\\op'
+    const uv = join(home, '.local', 'bin', 'kimi.exe')
+    const legacy = join(home, '.kimi-code', 'bin', 'kimi.exe')
+    const resolved = resolveKimiBinary({
+      env: undefined,
+      platform: 'win32',
+      home,
+      pathEnv: join(home, '.kimi-code', 'bin'),
+      exists: (path) => path === uv || path === legacy,
+    })
+
+    expect(resolved).toBe(uv)
+  })
+
   it('discovers a Homebrew/uv kimi on macOS when it is not on PATH', () => {
     // join() uses the host separator, like the production code, so the expected paths match
     // regardless of which OS runs the test.

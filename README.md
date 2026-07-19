@@ -18,13 +18,13 @@ For the desktop app:
 
 - SSH access to any VMs you want Grove to manage
 - A supported copilot provider API key: Moonshot/Kimi or GLM-CN
-- [kimi-code CLI](https://github.com/MoonshotAI/kimi-code), installable from the in-app copilot panel when missing
+- [Kimi CLI](https://github.com/MoonshotAI/kimi-cli), installable from the in-app copilot panel when missing
 
 For local development:
 
 - Node.js 22 or newer
 - npm
-- [kimi-code CLI](https://github.com/MoonshotAI/kimi-code) on `PATH` for the copilot (`uv tool install kimi-cli`)
+- [Kimi CLI](https://github.com/MoonshotAI/kimi-cli) installed for the current user (`uv tool install kimi-cli`)
 
 ## Run
 
@@ -90,7 +90,7 @@ Configure the provider from the bottom-left Grove settings button or by creating
 GROVE_COPILOT_PROVIDER=moonshot # moonshot or glm-cn
 GROVE_COPILOT_API_KEY=...
 GROVE_COPILOT_BASE_URL=https://api.moonshot.cn/v1
-GROVE_COPILOT_MODEL=kimi-k2.6
+GROVE_COPILOT_MODEL=kimi-k3
 ```
 
 Selecting GLM-CN from settings fills in its OpenAI-compatible endpoint and `glm-5.2` model defaults.

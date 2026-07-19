@@ -27,11 +27,15 @@ function binaryNames(platform: NodeJS.Platform) {
  * the GUI/launcher PATH, which often omits these, so `spawn('kimi')` fails with ENOENT even
  * though kimi is installed. Probing these lets the copilot work without manual setup.
  */
-function commonInstallDirs(platform: NodeJS.Platform, home: string) {
+function uvToolInstallDirs(home: string) {
+  return [join(home, '.local', 'bin')]
+}
+
+function commonSystemInstallDirs(platform: NodeJS.Platform, home: string) {
   if (platform === 'win32') {
-    return [join(home, '.local', 'bin')]
+    return []
   }
-  return [join(home, '.local', 'bin'), join(home, '.cargo', 'bin'), '/usr/local/bin', '/opt/homebrew/bin']
+  return [join(home, '.cargo', 'bin'), '/usr/local/bin', '/opt/homebrew/bin']
 }
 
 /**
@@ -39,6 +43,8 @@ function commonInstallDirs(platform: NodeJS.Platform, home: string) {
  * resolveKimiBinary this never falls back to a bare name, so it answers "is kimi installed?"
  * and (for a freshly `uv tool install`-ed binary) "where did it land?". Precedence mirrors
  * resolveKimiBinary, but a configured GROVE_KIMI_BIN that points nowhere counts as missing.
+ * The uv tool installation wins over PATH so a legacy ~/.kimi-code/bin executable cannot shadow
+ * the current system kimi-cli package.
  */
 export function findKimiBinary(lookup: KimiBinaryLookup = {}): string | undefined {
   const exists = lookup.exists ?? existsSync
@@ -52,7 +58,7 @@ export function findKimiBinary(lookup: KimiBinaryLookup = {}): string | undefine
   const names = binaryNames(platform)
 
   const pathDirs = (lookup.pathEnv ?? process.env.PATH ?? '').split(delimiter).filter(Boolean)
-  for (const dir of [...pathDirs, ...commonInstallDirs(platform, home)]) {
+  for (const dir of [...uvToolInstallDirs(home), ...pathDirs, ...commonSystemInstallDirs(platform, home)]) {
     for (const name of names) {
       const full = join(dir, name)
       if (exists(full)) {
@@ -72,9 +78,10 @@ export function isKimiInstalled(lookup: KimiBinaryLookup = {}): boolean {
 /**
  * Resolve the kimi executable. Precedence:
  * 1. GROVE_KIMI_BIN (explicit, wins outright).
- * 2. A bare `kimi` if it already resolves on PATH (let spawn find it).
- * 3. A full path in a well-known install dir (e.g. ~/.local/bin from `uv tool install`).
- * 4. Fall back to `kimi`, so a truly-missing binary still surfaces the actionable ENOENT.
+ * 2. The current system kimi-cli executable installed by uv in ~/.local/bin.
+ * 3. A bare `kimi` if it resolves on PATH (let spawn find it).
+ * 4. A full path in another well-known system install directory.
+ * 5. Fall back to `kimi`, so a truly-missing binary still surfaces the actionable ENOENT.
  */
 export function resolveKimiBinary(lookup: KimiBinaryLookup = {}): string {
   const configured = (lookup.env ?? envValue('GROVE_KIMI_BIN'))?.trim()
@@ -87,6 +94,15 @@ export function resolveKimiBinary(lookup: KimiBinaryLookup = {}): string {
   const home = lookup.home ?? homedir()
   const names = binaryNames(platform)
 
+  for (const dir of uvToolInstallDirs(home)) {
+    for (const name of names) {
+      const full = join(dir, name)
+      if (exists(full)) {
+        return full
+      }
+    }
+  }
+
   const pathDirs = (lookup.pathEnv ?? process.env.PATH ?? '').split(delimiter).filter(Boolean)
   for (const dir of pathDirs) {
     for (const name of names) {
@@ -96,7 +112,7 @@ export function resolveKimiBinary(lookup: KimiBinaryLookup = {}): string {
     }
   }
 
-  for (const dir of commonInstallDirs(platform, home)) {
+  for (const dir of commonSystemInstallDirs(platform, home)) {
     for (const name of names) {
       const full = join(dir, name)
       if (exists(full)) {

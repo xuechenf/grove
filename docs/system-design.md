@@ -60,7 +60,7 @@ Backend startup loads `.grove/.env.local` before reading process environment. Ke
 GROVE_COPILOT_PROVIDER=moonshot # moonshot or glm-cn
 GROVE_COPILOT_API_KEY=...
 GROVE_COPILOT_BASE_URL=https://api.moonshot.cn/v1
-GROVE_COPILOT_MODEL=kimi-k2.6
+GROVE_COPILOT_MODEL=kimi-k3
 ```
 
 The bottom-left Grove settings panel saves these values to `.grove/.env.local` through `POST /api/copilot/provider`. Existing `GROVE_MOONSHOT_*` values remain supported as Moonshot fallback input.

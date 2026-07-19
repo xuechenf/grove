@@ -9,7 +9,7 @@ import { projectStatePath } from './projectState'
  * project-local kimi config for non-interactive runs.
  */
 export const DEFAULT_MOONSHOT_BASE_URL = 'https://api.moonshot.cn/v1'
-export const DEFAULT_MOONSHOT_MODEL = 'kimi-k2.6'
+export const DEFAULT_MOONSHOT_MODEL = 'kimi-k3'
 export const DEFAULT_GLM_CN_BASE_URL = 'https://open.bigmodel.cn/api/coding/paas/v4'
 export const DEFAULT_GLM_CN_MODEL = 'glm-5.2'
 
@@ -41,6 +41,12 @@ function providerFromEnv(): CopilotProvider {
   return normalizeProvider(envValue('GROVE_COPILOT_PROVIDER')) ?? 'moonshot'
 }
 
+function normalizeModel(provider: CopilotProvider, model: string) {
+  // Moonshot's public API advertises K3 under the canonical `kimi-k3` id. Preserve
+  // compatibility with Grove settings saved before that id was published.
+  return provider === 'moonshot' && model.trim().toLowerCase() === 'k3' ? 'kimi-k3' : model
+}
+
 function apiKeyFromEnv(provider: CopilotProvider) {
   const generic = envValue('GROVE_COPILOT_API_KEY')
   if (generic) {
@@ -66,6 +72,10 @@ export function copilotProviderStatusFromEnv() {
   const provider = providerFromEnv()
   const legacyMoonshot = !envValue('GROVE_COPILOT_PROVIDER') && provider === 'moonshot'
   const defaults = providerDefaults[provider]
+  const configuredModel =
+    envValue('GROVE_COPILOT_MODEL') ??
+    (legacyMoonshot ? envValue('GROVE_MOONSHOT_MODEL') : undefined) ??
+    defaults.model
   return {
     provider,
     configured: Boolean(apiKeyFromEnv(provider)),
@@ -73,10 +83,7 @@ export function copilotProviderStatusFromEnv() {
       envValue('GROVE_COPILOT_BASE_URL') ??
       (legacyMoonshot ? envValue('GROVE_MOONSHOT_BASE_URL') : undefined) ??
       defaults.baseUrl,
-    model:
-      envValue('GROVE_COPILOT_MODEL') ??
-      (legacyMoonshot ? envValue('GROVE_MOONSHOT_MODEL') : undefined) ??
-      defaults.model,
+    model: normalizeModel(provider, configuredModel),
   }
 }
 

@@ -22,6 +22,8 @@ downloads
 local-files
 scripts/
 *.pem
+grove_accessKeys.csv
+*_accessKeys.csv
 *.local
 .env
 .env.*

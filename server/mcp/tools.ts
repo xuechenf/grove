@@ -226,6 +226,124 @@ export function buildToolsForScope(scope: CopilotScope, host: CopilotToolHost): 
       run: (args) => host.listRemoteFiles({ vmId: focusedVmId, path: str(args.path, '/') }),
     })
   } else {
+    // Fleet-only cloud tools are provider-neutral. The agent never receives credentials or a
+    // provider SDK; every read and mutation is mediated by Grove's local API and audit gate.
+    tools.push({
+      name: 'list_cloud_machines',
+      description: 'List existing cloud machines visible through Grove. This cannot create resources.',
+      inputSchema: { type: 'object', properties: {} },
+      run: () => host.inspectCloudMachines({ scope }),
+    })
+
+    tools.push({
+      name: 'list_cloud_firewall_rules',
+      description: 'List provider-neutral ingress and egress firewall rules attached to an existing cloud machine.',
+      inputSchema: {
+        type: 'object',
+        properties: { machineId: { type: 'string', description: 'Cloud machine id from list_cloud_machines.' } },
+        required: ['machineId'],
+      },
+      run: (args) => host.inspectCloudFirewallRules({ scope, machineId: str(args.machineId) }),
+    })
+
+    tools.push({
+      name: 'get_cloud_metrics',
+      description: 'Read basic CPU, network, and status-check metrics for an existing cloud machine.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          machineId: { type: 'string', description: 'Cloud machine id from list_cloud_machines.' },
+          hours: { type: 'number', description: 'History window in hours, from 1 to 168 (default 1).' },
+        },
+        required: ['machineId'],
+      },
+      run: (args) => host.inspectCloudMetrics({ scope, machineId: str(args.machineId), hours: int(args.hours, 1) }),
+    })
+
+    tools.push({
+      name: 'change_cloud_power',
+      description: 'Start, stop, or reboot an existing cloud machine through Grove. Requires user confirmation.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          machineId: { type: 'string', description: 'Cloud machine id from list_cloud_machines.' },
+          action: { type: 'string', enum: ['start', 'stop', 'reboot'] },
+          reason: { type: 'string', description: 'Why the power action is needed.' },
+        },
+        required: ['machineId', 'action', 'reason'],
+      },
+      run: (args) => {
+        const action = str(args.action)
+        if (!['start', 'stop', 'reboot'].includes(action)) {
+          return { ok: false, summary: 'Invalid cloud power action.', error: 'Use start, stop, or reboot.' }
+        }
+        return host.cloudPowerFromCopilot({
+          scope,
+          machineId: str(args.machineId),
+          action: action as 'start' | 'stop' | 'reboot',
+          reason: str(args.reason, 'Requested by copilot.'),
+        })
+      },
+    })
+
+    tools.push({
+      name: 'add_cloud_firewall_rule',
+      description: 'Add an ingress rule to an existing cloud machine firewall through Grove. Requires user confirmation.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          machineId: { type: 'string', description: 'Cloud machine id from list_cloud_machines.' },
+          firewallId: { type: 'string', description: 'Firewall id returned with the machine or its rule list.' },
+          protocol: { type: 'string', enum: ['tcp', 'udp'] },
+          fromPort: { type: 'number' },
+          toPort: { type: 'number' },
+          cidr: { type: 'string', description: 'IPv4 or IPv6 CIDR source.' },
+          description: { type: 'string' },
+          reason: { type: 'string', description: 'Why this access is needed.' },
+        },
+        required: ['machineId', 'firewallId', 'protocol', 'fromPort', 'toPort', 'cidr', 'reason'],
+      },
+      run: (args) => {
+        const protocol = str(args.protocol)
+        if (!['tcp', 'udp'].includes(protocol)) {
+          return { ok: false, summary: 'Invalid firewall protocol.', error: 'Use tcp or udp.' }
+        }
+        return host.addCloudFirewallRuleFromCopilot({
+          scope,
+          machineId: str(args.machineId),
+          rule: {
+            firewallId: str(args.firewallId),
+            protocol: protocol as 'tcp' | 'udp',
+            fromPort: int(args.fromPort, -1),
+            toPort: int(args.toPort, -1),
+            cidr: str(args.cidr),
+            description: str(args.description) || undefined,
+          },
+          reason: str(args.reason, 'Requested by copilot.'),
+        })
+      },
+    })
+
+    tools.push({
+      name: 'remove_cloud_firewall_rule',
+      description: 'Remove an ingress rule from an existing cloud machine firewall through Grove. Requires user confirmation.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          machineId: { type: 'string', description: 'Cloud machine id from list_cloud_machines.' },
+          ruleId: { type: 'string', description: 'Rule id from list_cloud_firewall_rules.' },
+          reason: { type: 'string', description: 'Why the rule should be removed.' },
+        },
+        required: ['machineId', 'ruleId', 'reason'],
+      },
+      run: (args) => host.removeCloudFirewallRuleFromCopilot({
+        scope,
+        machineId: str(args.machineId),
+        ruleId: str(args.ruleId),
+        reason: str(args.reason, 'Requested by copilot.'),
+      }),
+    })
+
     // Fleet-only tool: targets are frozen at call time and each run is gated + locked.
     tools.push({
       name: 'fleet_run_command',

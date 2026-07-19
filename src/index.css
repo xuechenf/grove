@@ -60,6 +60,16 @@
   }
 }
 
+@layer components {
+  .field-control {
+    @apply h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none transition focus:border-slate-500;
+  }
+
+  .icon-action {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40;
+  }
+}
+
 :root[data-grove-theme='dark'] {
   color: #e5e7eb;
   background: #0f172a;

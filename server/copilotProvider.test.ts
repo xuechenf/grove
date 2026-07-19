@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  DEFAULT_MOONSHOT_MODEL,
   DEFAULT_KIMI_MAX_CONTEXT,
   DEFAULT_KIMI_MAX_STEPS,
   DEFAULT_KIMI_TOOL_TIMEOUT_MS,
+  copilotProviderStatusFromEnv,
   ensureKimiConfigFile,
   kimiMaxContextSize,
   kimiMaxStepsPerTurn,
@@ -21,6 +23,7 @@ const saved = {
   copilotBaseUrl: process.env.GROVE_COPILOT_BASE_URL,
   copilotModel: process.env.GROVE_COPILOT_MODEL,
   moonshotApiKey: process.env.GROVE_MOONSHOT_API_KEY,
+  moonshotModel: process.env.GROVE_MOONSHOT_MODEL,
   stateDir: process.env.GROVE_STATE_DIR,
 }
 
@@ -30,6 +33,7 @@ beforeEach(() => {
   delete process.env.GROVE_COPILOT_BASE_URL
   delete process.env.GROVE_COPILOT_MODEL
   delete process.env.GROVE_MOONSHOT_API_KEY
+  delete process.env.GROVE_MOONSHOT_MODEL
 })
 
 afterEach(() => {
@@ -42,6 +46,7 @@ afterEach(() => {
     ['GROVE_COPILOT_BASE_URL', saved.copilotBaseUrl],
     ['GROVE_COPILOT_MODEL', saved.copilotModel],
     ['GROVE_MOONSHOT_API_KEY', saved.moonshotApiKey],
+    ['GROVE_MOONSHOT_MODEL', saved.moonshotModel],
     ['GROVE_STATE_DIR', saved.stateDir],
   ] as const) {
     if (value === undefined) {
@@ -53,6 +58,15 @@ afterEach(() => {
 })
 
 describe('kimiMaxContextSize', () => {
+  it('uses K3 as Grove\'s default Moonshot model', () => {
+    expect(DEFAULT_MOONSHOT_MODEL).toBe('kimi-k3')
+  })
+
+  it('normalizes the legacy k3 setting to Moonshot\'s canonical model id', () => {
+    process.env.GROVE_COPILOT_MODEL = 'k3'
+    expect(copilotProviderStatusFromEnv().model).toBe('kimi-k3')
+  })
+
   it('defaults to the full model window (cost is controlled elsewhere, not by shrinking context)', () => {
     delete process.env.GROVE_KIMI_MAX_CONTEXT
     expect(kimiMaxContextSize()).toBe(DEFAULT_KIMI_MAX_CONTEXT)
@@ -80,6 +94,7 @@ describe('kimiMaxContextSize', () => {
       process.env.GROVE_KIMI_MAX_CONTEXT = '80000'
       process.env.GROVE_KIMI_MAX_STEPS = '40'
       const toml = readFileSync(ensureKimiConfigFile()!, 'utf8')
+      expect(toml).toContain('model = "kimi-k3"')
       expect(toml).toContain('max_context_size = 80000')
       expect(toml).toContain('[loop_control]')
       expect(toml).toContain('max_steps_per_turn = 40')

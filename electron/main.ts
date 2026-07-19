@@ -1,6 +1,7 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, safeStorage, shell } from 'electron'
 import { join } from 'node:path'
 import { startGroveServer, type GroveServerHandle } from '../server/start'
+import { BlobCredentialVault } from '../server/credentialVault'
 
 // In dev, `npm run electron:dev` sets VITE_DEV_SERVER_URL and runs the Vite dev server + the tsx
 // backend separately; the window just loads the Vite URL. In a packaged build neither is set, so
@@ -61,7 +62,13 @@ async function boot() {
   }
 
   if (!devServerUrl) {
-    serverHandle = await startGroveServer({ port: 0, staticDir: resolveStaticDir() })
+    const credentialVault = safeStorage.isEncryptionAvailable()
+      ? new BlobCredentialVault({
+          encrypt: (plaintext) => safeStorage.encryptString(plaintext),
+          decrypt: (ciphertext) => safeStorage.decryptString(ciphertext),
+        })
+      : undefined
+    serverHandle = await startGroveServer({ port: 0, staticDir: resolveStaticDir(), credentialVault })
   }
 
   await createWindow()

@@ -2,6 +2,8 @@ import { EventEmitter } from 'node:events'
 import { initialMessages, initialProposals, initialTransfers, vms as fixtureVms } from '../src/data/fixtures'
 import type {
   ActionProposal,
+  ApplicationEnvironmentInput,
+  AwsCredentialCsvImport,
   AppRunnerService,
   AppRunnerServiceInput,
   AppRunnerServiceState,
@@ -18,6 +20,13 @@ import type {
   CopilotRuntimeStatus,
   CopilotScope,
   CopilotToolCall,
+  CloudFirewallRuleInput,
+  CloudInventory,
+  CloudMachine,
+  CloudMachinePowerAction,
+  CredentialProfileInput,
+  GroveApplicationInput,
+  InfrastructureProvider,
   ProcessInfo,
   ServiceInfo,
   ServerEvent,
@@ -29,6 +38,8 @@ import type {
 } from '../src/types'
 import { scopeVmId, vmScope } from '../src/types'
 import { loadAppRunnerServices, saveAppRunnerServices } from './appRunnerMetadata'
+import { ApplicationManager } from './applicationManager'
+import { ApplicationWorkspace } from './applicationWorkspace'
 import { classifyCommand, isReadOnlyCommand } from './commandProfiles'
 import { installKimiCli } from './copilotInstall'
 import { CopilotJournal } from './copilotJournal'
@@ -40,12 +51,22 @@ import {
   type CopilotProviderConfig,
 } from './copilotProvider'
 import { envFlag, envValue, saveCopilotProviderLocalEnv } from './env'
+import { CredentialManager } from './credentialManager'
+import {
+  EncryptedFileCredentialVault,
+  MemoryCredentialVault,
+  type CredentialVault,
+} from './credentialVault'
 import { loadInventory, saveInventory, vmFromConfig } from './inventory'
 import { ScopeTokenRegistry } from './mcp/endpoint'
 import { KeyedMutex } from './mutationLock'
 import { extractOpenUiArtifact } from './openUiArtifacts'
 import type { SshSessionManager } from './sshSessionManager'
 import { MockSshSessionManager, RealSshSessionManager } from './sshSessionManager'
+import { ensureV2StateMigration } from './stateMigration'
+import { InfrastructureManager } from './infrastructureManager'
+import type { TerraformExecutor } from './terraformRunner'
+import { CloudProviderManager, type CloudControlService } from './cloudProvider'
 
 const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -734,6 +755,27 @@ export interface GroveStoreOptions {
   tokens?: ScopeTokenRegistry
   /** kimi-code CLI installer; injectable so tests don't shell out to a real install. */
   installer?: typeof installKimiCli
+  applicationWorkspace?: ApplicationWorkspace
+  credentialVault?: CredentialVault
+  terraform?: TerraformExecutor
+  cloudControl?: CloudControlService
+}
+
+function cloudMachineForAgent(machine: CloudMachine) {
+  return {
+    id: machine.id,
+    name: machine.name,
+    location: machine.location,
+    zone: machine.zone,
+    state: machine.state,
+    publicIp: machine.publicIp,
+    privateIp: machine.privateIp,
+    machineType: machine.machineType,
+    imageId: machine.imageId,
+    launchedAt: machine.launchedAt,
+    monitoring: machine.monitoring,
+    firewalls: machine.firewalls,
+  }
 }
 
 export class GroveStore implements CopilotToolHost {
@@ -746,6 +788,11 @@ export class GroveStore implements CopilotToolHost {
   private readonly installer: typeof installKimiCli
   private installState: CopilotInstallState = { status: 'idle', log: '' }
   private readonly mutationLock = new KeyedMutex()
+  private readonly applicationWorkspace: ApplicationWorkspace
+  private readonly applicationManager: ApplicationManager
+  private readonly credentialManager: CredentialManager
+  private readonly infrastructureManager: InfrastructureManager
+  private readonly cloudProviderManager: CloudControlService
   /**
    * One confirmation card at a time per scope. When the agent issues several gated
    * commands in parallel, their cards surface strictly in arrival order and the next one
@@ -779,8 +826,33 @@ export class GroveStore implements CopilotToolHost {
       new CopilotSupervisor({ host: this, tokens: this.scopeTokens, driver: options.driver })
     this.installer = options.installer ?? installKimiCli
     const configs = loadInventory()
+    ensureV2StateMigration(configs, { persist: !useFixtures })
     this.vmConfigs = configs
     this.vms = this.vmConfigs.map((config) => vmFromConfig(config, fixtureVms.find((vm) => vm.id === config.id)))
+    this.applicationWorkspace = options.applicationWorkspace ?? new ApplicationWorkspace({ persist: !useFixtures })
+    const credentialVault =
+      options.credentialVault ?? (useFixtures ? new MemoryCredentialVault() : new EncryptedFileCredentialVault())
+    this.credentialManager = new CredentialManager(this.applicationWorkspace, credentialVault, () =>
+      this.publish({ type: 'settings.updated', payload: this.applicationWorkspace.settings() }),
+    )
+    this.cloudProviderManager = options.cloudControl ?? new CloudProviderManager(this.credentialManager)
+    this.applicationManager = new ApplicationManager(
+      this.applicationWorkspace,
+      this.ssh,
+      (vmId) => this.getVm(vmId),
+      {
+        onApplicationUpdated: (application) => this.publish({ type: 'application.updated', payload: application }),
+        onDeploymentUpdated: (deployment) => this.publish({ type: 'deployment.updated', payload: deployment }),
+      },
+    )
+    this.infrastructureManager = new InfrastructureManager(this.applicationWorkspace, this.credentialManager, {
+      terraform: options.terraform,
+      onApplicationUpdated: (application) => this.publish({ type: 'application.updated', payload: application }),
+      createVm: (input, provider, region) => this.createInfrastructureVm(input, provider, region),
+      removeVm: (vmId) => {
+        if (this.getVm(vmId)) this.deleteVm(vmId)
+      },
+    })
     if (!useFixtures) {
       const appServices = loadAppRunnerServices()
       this.vms = this.vms.map((vm) => ({
@@ -792,6 +864,7 @@ export class GroveStore implements CopilotToolHost {
             accessUrl: appRunnerAccessUrl(vm, service.port),
           })),
       }))
+      this.applicationManager.migrateLegacyAppRunnerServices(appServices)
     }
     this.transfers = useFixtures ? [...initialTransfers] : []
     if (useFixtures) {
@@ -891,6 +964,8 @@ export class GroveStore implements CopilotToolHost {
   snapshot(): AppSnapshot {
     return {
       vms: this.vms,
+      applications: this.applicationManager.listApplications(),
+      settings: this.applicationWorkspace.settings(),
       transfers: this.transfers,
       messages: this.messages,
       proposals: this.proposals,
@@ -916,6 +991,128 @@ export class GroveStore implements CopilotToolHost {
 
   getVm(vmId: string) {
     return this.vms.find((vm) => vm.id === vmId)
+  }
+
+  groveSettings() {
+    return this.applicationWorkspace.settings()
+  }
+
+  relocateWorkspace(workspacePath: string) {
+    const settings = this.applicationWorkspace.relocateWorkspace(workspacePath)
+    this.publish({ type: 'settings.updated', payload: settings })
+    for (const application of this.applicationManager.listApplications()) {
+      this.publish({ type: 'application.updated', payload: application })
+    }
+    return settings
+  }
+
+  createCredentialProfile(input: CredentialProfileInput) {
+    return this.credentialManager.create(input)
+  }
+
+  async importAwsCredentialCsv(input: AwsCredentialCsvImport) {
+    const profile = this.credentialManager.importAwsCsv(input)
+    return this.credentialManager.test(profile.id)
+  }
+
+  updateCredentialProfile(profileId: string, input: CredentialProfileInput) {
+    return this.credentialManager.update(profileId, input)
+  }
+
+  testCredentialProfile(profileId: string) {
+    return this.credentialManager.test(profileId)
+  }
+
+  deleteCredentialProfile(profileId: string) {
+    return this.credentialManager.delete(profileId)
+  }
+
+  async listCloudMachines(profileId?: string) {
+    return this.enrichCloudInventory(await this.cloudProviderManager.listMachines(profileId))
+  }
+
+  listCloudFirewallRules(machineId: string) {
+    return this.cloudProviderManager.listFirewallRules(machineId)
+  }
+
+  addCloudFirewallRule(machineId: string, input: CloudFirewallRuleInput) {
+    return this.mutationLock.run(`cloud:${machineId}`, () => this.cloudProviderManager.addFirewallRule(machineId, input))
+  }
+
+  removeCloudFirewallRule(machineId: string, ruleId: string) {
+    return this.mutationLock.run(`cloud:${machineId}`, () => this.cloudProviderManager.removeFirewallRule(machineId, ruleId))
+  }
+
+  getCloudMachineMetrics(machineId: string, hours?: number) {
+    return this.cloudProviderManager.getMetrics(machineId, hours)
+  }
+
+  async cloudMachinePower(machineId: string, action: CloudMachinePowerAction) {
+    const machine = await this.mutationLock.run(`cloud:${machineId}`, () => this.cloudProviderManager.power(machineId, action))
+    return this.enrichCloudMachine(machine)
+  }
+
+  private enrichCloudInventory(inventory: CloudInventory): CloudInventory {
+    return { ...inventory, machines: inventory.machines.map((machine) => this.enrichCloudMachine(machine)) }
+  }
+
+  private enrichCloudMachine(machine: CloudMachine): CloudMachine {
+    const local = this.vms.find((vm) =>
+      [machine.publicIp, machine.privateIp].filter(Boolean).includes(vm.connection.host),
+    )
+    return local ? { ...machine, name: local.name } : machine
+  }
+
+  listApplications() {
+    return this.applicationManager.listApplications()
+  }
+
+  getApplication(applicationId: string) {
+    return this.applicationManager.getApplication(applicationId)
+  }
+
+  createApplication(input: GroveApplicationInput) {
+    return this.applicationManager.createApplication(input)
+  }
+
+  updateApplication(applicationId: string, input: GroveApplicationInput) {
+    return this.applicationManager.updateConfiguration(applicationId, input)
+  }
+
+  syncApplicationSource(applicationId: string) {
+    return this.applicationManager.syncSource(applicationId)
+  }
+
+  buildApplication(applicationId: string) {
+    return this.applicationManager.buildApplication(applicationId)
+  }
+
+  deployApplication(applicationId: string, versionId: string, vmIds: string[], environment?: string) {
+    return this.applicationManager.deployApplication(applicationId, versionId, vmIds, environment)
+  }
+
+  readApplicationLogs(applicationId: string, vmId: string, lines?: number) {
+    return this.applicationManager.readApplicationLogs(applicationId, vmId, lines)
+  }
+
+  terraformStatus() {
+    return this.infrastructureManager.terraformStatus()
+  }
+
+  installTerraform() {
+    return this.infrastructureManager.installTerraform()
+  }
+
+  createApplicationEnvironment(applicationId: string, input: ApplicationEnvironmentInput) {
+    return this.infrastructureManager.createEnvironment(applicationId, input)
+  }
+
+  planApplicationEnvironment(applicationId: string, environmentId: string, destroy = false) {
+    return this.infrastructureManager.plan(applicationId, environmentId, destroy)
+  }
+
+  applyApplicationEnvironment(applicationId: string, environmentId: string, planOperationId: string) {
+    return this.infrastructureManager.apply(applicationId, environmentId, planOperationId)
   }
 
   createVm(input: VmConnectionInput) {
@@ -963,6 +1160,24 @@ export class GroveStore implements CopilotToolHost {
       },
     })
     return vm
+  }
+
+  private createInfrastructureVm(
+    input: VmConnectionInput,
+    provider: InfrastructureProvider,
+    region: string,
+  ) {
+    const vm = this.createVm(input)
+    this.vmConfigs = this.vmConfigs.map((config) =>
+      config.id === vm.id
+        ? { ...config, provider: { name: provider, region, node: 'terraform' }, labels: [...(config.labels ?? []), 'grove:terraform'] }
+        : config,
+    )
+    this.persistInventory()
+    const config = this.vmConfigs.find((item) => item.id === vm.id)!
+    const updated = vmFromConfig(config, vm)
+    this.replaceVm(updated)
+    return updated
   }
 
   updateVm(vmId: string, input: VmConnectionInput) {
@@ -1474,6 +1689,149 @@ export class GroveStore implements CopilotToolHost {
   }
 
   // -- CopilotToolHost: backend capabilities exposed to the agent through scoped MCP tools.
+
+  async inspectCloudMachines(input: { scope: CopilotScope }): Promise<ToolResult> {
+    const toolCall = this.startToolCall(input.scope, 'list_cloud_machines', 'read', undefined, 'Existing cloud machines')
+    try {
+      const inventory = await this.listCloudMachines()
+      const summary = `Found ${inventory.machines.length} existing cloud machine${inventory.machines.length === 1 ? '' : 's'}.`
+      this.finishToolCall(toolCall, 'completed', summary)
+      return {
+        ok: true,
+        summary,
+        data: {
+          machines: inventory.machines.map(cloudMachineForAgent),
+          scannedAt: inventory.scannedAt,
+          warnings: inventory.warnings,
+        },
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Cloud inventory failed.'
+      this.finishToolCall(toolCall, 'failed', detail)
+      return { ok: false, summary: 'Cloud inventory failed.', error: detail }
+    }
+  }
+
+  async inspectCloudFirewallRules(input: { scope: CopilotScope; machineId: string }): Promise<ToolResult> {
+    const toolCall = this.startToolCall(input.scope, 'list_cloud_firewall_rules', 'read', undefined, input.machineId)
+    try {
+      const rules = await this.cloudProviderManager.listFirewallRules(input.machineId)
+      const summary = `Found ${rules.length} firewall rule${rules.length === 1 ? '' : 's'} for the cloud machine.`
+      this.finishToolCall(toolCall, 'completed', summary)
+      return { ok: true, summary, data: rules }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Firewall inspection failed.'
+      this.finishToolCall(toolCall, 'failed', detail)
+      return { ok: false, summary: 'Firewall inspection failed.', error: detail }
+    }
+  }
+
+  async inspectCloudMetrics(input: { scope: CopilotScope; machineId: string; hours?: number }): Promise<ToolResult> {
+    const toolCall = this.startToolCall(input.scope, 'get_cloud_metrics', 'read', undefined, input.machineId)
+    try {
+      const metrics = await this.cloudProviderManager.getMetrics(input.machineId, input.hours)
+      const summary = `Loaded ${metrics.series.length} metric series for the cloud machine.`
+      this.finishToolCall(toolCall, 'completed', summary)
+      return { ok: true, summary, data: metrics }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Cloud metrics failed.'
+      this.finishToolCall(toolCall, 'failed', detail)
+      return { ok: false, summary: 'Cloud metrics failed.', error: detail }
+    }
+  }
+
+  async cloudPowerFromCopilot(input: {
+    scope: CopilotScope
+    machineId: string
+    action: CloudMachinePowerAction
+    reason: string
+  }): Promise<ToolResult> {
+    const command = `cloud-machine ${input.action} ${input.machineId}`
+    const toolCall = this.startToolCall(input.scope, 'change_cloud_power', 'execute', undefined, command)
+    const confirmation = await this.requestConfirmation(input.scope, command, () =>
+      this.cloudPermissionProposal(input.scope, input.machineId, `Change cloud machine power: ${input.action}`, input.reason, command, toolCall.id),
+    )
+    if (confirmation.decision === 'deny') {
+      this.finishToolCall(toolCall, 'failed', 'User declined the cloud power action.')
+      return { ok: false, summary: 'User declined the cloud power action.', error: 'declined' }
+    }
+    try {
+      const machine = this.enrichCloudMachine(await this.mutationLock.run(`cloud:${input.machineId}`, () =>
+        this.cloudProviderManager.power(input.machineId, input.action),
+      ))
+      const summary = `${machine.name}: ${input.action} request accepted; current state is ${machine.state}.`
+      this.finishToolCall(toolCall, 'completed', summary)
+      this.completeCloudProposal(confirmation.proposalId, true, summary)
+      return { ok: true, summary, data: cloudMachineForAgent(machine) }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Cloud power action failed.'
+      this.finishToolCall(toolCall, 'failed', detail)
+      this.completeCloudProposal(confirmation.proposalId, false, detail)
+      return { ok: false, summary: 'Cloud power action failed.', error: detail }
+    }
+  }
+
+  async addCloudFirewallRuleFromCopilot(input: {
+    scope: CopilotScope
+    machineId: string
+    rule: CloudFirewallRuleInput
+    reason: string
+  }): Promise<ToolResult> {
+    const command = `cloud-firewall add ${input.machineId} ${input.rule.protocol} ${input.rule.fromPort}-${input.rule.toPort} ${input.rule.cidr}`
+    const toolCall = this.startToolCall(input.scope, 'add_cloud_firewall_rule', 'edit', undefined, command)
+    const confirmation = await this.requestConfirmation(input.scope, command, () =>
+      this.cloudPermissionProposal(input.scope, input.machineId, 'Add cloud firewall rule', input.reason, command, toolCall.id),
+    )
+    if (confirmation.decision === 'deny') {
+      this.finishToolCall(toolCall, 'failed', 'User declined the firewall change.')
+      return { ok: false, summary: 'User declined the firewall change.', error: 'declined' }
+    }
+    try {
+      const rules = await this.mutationLock.run(`cloud:${input.machineId}`, () =>
+        this.cloudProviderManager.addFirewallRule(input.machineId, input.rule),
+      )
+      const summary = `Firewall rule added; the machine now has ${rules.length} visible rule${rules.length === 1 ? '' : 's'}.`
+      this.finishToolCall(toolCall, 'completed', summary)
+      this.completeCloudProposal(confirmation.proposalId, true, summary)
+      return { ok: true, summary, data: rules }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Firewall change failed.'
+      this.finishToolCall(toolCall, 'failed', detail)
+      this.completeCloudProposal(confirmation.proposalId, false, detail)
+      return { ok: false, summary: 'Firewall change failed.', error: detail }
+    }
+  }
+
+  async removeCloudFirewallRuleFromCopilot(input: {
+    scope: CopilotScope
+    machineId: string
+    ruleId: string
+    reason: string
+  }): Promise<ToolResult> {
+    const command = `cloud-firewall remove ${input.machineId} ${input.ruleId}`
+    const toolCall = this.startToolCall(input.scope, 'remove_cloud_firewall_rule', 'edit', undefined, command)
+    const confirmation = await this.requestConfirmation(input.scope, command, () =>
+      this.cloudPermissionProposal(input.scope, input.machineId, 'Remove cloud firewall rule', input.reason, command, toolCall.id),
+    )
+    if (confirmation.decision === 'deny') {
+      this.finishToolCall(toolCall, 'failed', 'User declined the firewall change.')
+      return { ok: false, summary: 'User declined the firewall change.', error: 'declined' }
+    }
+    try {
+      const rules = await this.mutationLock.run(`cloud:${input.machineId}`, () =>
+        this.cloudProviderManager.removeFirewallRule(input.machineId, input.ruleId),
+      )
+      const summary = `Firewall rule removed; the machine now has ${rules.length} visible rule${rules.length === 1 ? '' : 's'}.`
+      this.finishToolCall(toolCall, 'completed', summary)
+      this.completeCloudProposal(confirmation.proposalId, true, summary)
+      return { ok: true, summary, data: rules }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Firewall change failed.'
+      this.finishToolCall(toolCall, 'failed', detail)
+      this.completeCloudProposal(confirmation.proposalId, false, detail)
+      return { ok: false, summary: 'Firewall change failed.', error: detail }
+    }
+  }
 
   async runScopedCommand(input: { scope: CopilotScope; vmId: string; command: string; reason: string }): Promise<ToolResult> {
     const vm = this.getVm(input.vmId)
@@ -2013,6 +2371,37 @@ export class GroveStore implements CopilotToolHost {
       toolCallId,
       createdAt: Date.now(),
     }
+  }
+
+  private cloudPermissionProposal(
+    scope: CopilotScope,
+    machineId: string,
+    title: string,
+    reason: string,
+    command: string,
+    toolCallId: string,
+  ): ActionProposal {
+    return {
+      id: id('proposal'),
+      vmId: machineId,
+      scope,
+      targetVmIds: [machineId],
+      title,
+      description: reason,
+      command,
+      actionType: 'custom_command',
+      risk: 'medium',
+      status: 'awaiting_confirmation',
+      toolCallId,
+      createdAt: Date.now(),
+    }
+  }
+
+  private completeCloudProposal(proposalId: string | undefined, succeeded: boolean, result: string) {
+    if (!proposalId) return
+    const proposal = this.proposals.find((item) => item.id === proposalId)
+    if (!proposal) return
+    this.updateProposal({ ...proposal, status: succeeded ? 'executed' : 'dismissed', result })
   }
 
   private fleetPermissionProposal(

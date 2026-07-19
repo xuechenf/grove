@@ -1,0 +1,1920 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Grove Environments — Static Product Mockup</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17201b;
+        --muted: #66726b;
+        --faint: #8b958f;
+        --line: #dde4df;
+        --line-strong: #cbd5ce;
+        --canvas: #f3f6f4;
+        --panel: #ffffff;
+        --panel-soft: #f8faf8;
+        --forest: #173f31;
+        --forest-2: #205640;
+        --leaf: #23825b;
+        --leaf-soft: #e8f5ee;
+        --amber: #b86d19;
+        --amber-soft: #fff5e7;
+        --red: #b54444;
+        --red-soft: #fff0f0;
+        --blue: #326bb5;
+        --blue-soft: #edf4ff;
+        --shadow: 0 14px 36px rgba(24, 50, 38, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+
+      body {
+        color: var(--ink);
+        background: var(--canvas);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 14px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .app-shell {
+        display: grid;
+        grid-template-columns: 252px minmax(0, 1fr);
+        height: 100vh;
+        min-width: 1040px;
+      }
+
+      .sidebar {
+        display: flex;
+        min-height: 0;
+        flex-direction: column;
+        color: #e9f1ec;
+        background:
+          radial-gradient(circle at 35% 0%, rgba(70, 139, 102, 0.28), transparent 32%),
+          #112d23;
+        border-right: 1px solid #22483a;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 20px 18px 17px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 35px;
+        height: 35px;
+        place-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.09);
+      }
+
+      .brand-mark svg {
+        width: 22px;
+        height: 22px;
+      }
+
+      .brand-name {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 720;
+        letter-spacing: -0.01em;
+      }
+
+      .brand-subtitle {
+        margin: 2px 0 0;
+        color: #9eb8aa;
+        font-size: 11px;
+      }
+
+      .workspace-pill {
+        margin: 14px 12px 8px;
+        padding: 11px 12px;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .workspace-pill-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 5px;
+      }
+
+      .eyebrow-light {
+        color: #90ab9c;
+        font-size: 10px;
+        font-weight: 750;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+
+      .workspace-state {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: #b9dfca;
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      .workspace-state::before {
+        width: 6px;
+        height: 6px;
+        content: "";
+        border-radius: 999px;
+        background: #48c78d;
+        box-shadow: 0 0 0 3px rgba(72, 199, 141, 0.12);
+      }
+
+      .workspace-name {
+        overflow: hidden;
+        color: #eef5f1;
+        font-size: 12px;
+        font-weight: 620;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .workspace-path {
+        overflow: hidden;
+        margin-top: 3px;
+        color: #8da99b;
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .primary-nav,
+      .bottom-nav {
+        display: grid;
+        gap: 4px;
+        padding: 8px 10px;
+      }
+
+      .nav-button {
+        display: flex;
+        width: 100%;
+        height: 38px;
+        align-items: center;
+        gap: 10px;
+        padding: 0 10px;
+        color: #abc0b5;
+        text-align: left;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        transition: 140ms ease;
+      }
+
+      .nav-button:hover {
+        color: #f4faf6;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .nav-button.active {
+        color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.11);
+        box-shadow: inset 3px 0 0 #55c58e;
+      }
+
+      .nav-icon {
+        display: grid;
+        width: 20px;
+        height: 20px;
+        flex: 0 0 auto;
+        place-items: center;
+        color: currentColor;
+      }
+
+      .nav-icon svg {
+        width: 17px;
+        height: 17px;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.7;
+      }
+
+      .nav-label {
+        flex: 1;
+        font-size: 12px;
+        font-weight: 620;
+      }
+
+      .nav-count {
+        min-width: 20px;
+        padding: 2px 6px;
+        color: #9cb4a7;
+        font-size: 10px;
+        text-align: center;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.07);
+      }
+
+      .sidebar-section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 17px 6px;
+        color: #789989;
+        font-size: 10px;
+        font-weight: 760;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+
+      .sidebar-section-title button {
+        display: grid;
+        width: 23px;
+        height: 23px;
+        place-items: center;
+        color: #9cb4a7;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .sidebar-context {
+        display: none;
+        min-height: 0;
+        flex: 1;
+        flex-direction: column;
+      }
+
+      .sidebar-context.active {
+        display: flex;
+      }
+
+      .app-list {
+        display: grid;
+        flex: 1;
+        align-content: start;
+        gap: 3px;
+        min-height: 0;
+        padding: 0 10px 10px;
+        overflow: auto;
+      }
+
+      .app-list-item {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 9px;
+        color: #b7c9bf;
+        text-align: left;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+      }
+
+      .app-list-item.active {
+        color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.075);
+      }
+
+      .app-glyph {
+        display: grid;
+        width: 27px;
+        height: 27px;
+        flex: 0 0 auto;
+        place-items: center;
+        color: #cce8d8;
+        font-size: 10px;
+        font-weight: 760;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.07);
+      }
+
+      .app-copy {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .app-copy strong,
+      .app-copy small {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .app-copy strong {
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .app-copy small {
+        margin-top: 2px;
+        color: #789989;
+        font-size: 10px;
+      }
+
+      .mini-health {
+        width: 7px;
+        height: 7px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: #48c78d;
+      }
+
+      .mini-health.offline {
+        background: #9ba79f;
+      }
+
+      .sidebar-spacer {
+        min-height: 12px;
+        flex: 0 0 12px;
+      }
+
+      .bottom-nav {
+        border-top: 1px solid rgba(255, 255, 255, 0.09);
+      }
+
+      .main-shell {
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .view {
+        display: none;
+        height: 100%;
+        min-height: 0;
+        flex-direction: column;
+      }
+
+      .view.active {
+        display: flex;
+      }
+
+      .topbar {
+        display: flex;
+        height: 66px;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.94);
+        backdrop-filter: blur(12px);
+      }
+
+      .breadcrumb {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--faint);
+        font-size: 12px;
+      }
+
+      .breadcrumb strong {
+        color: var(--ink);
+        font-weight: 680;
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .button {
+        display: inline-flex;
+        height: 34px;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        padding: 0 12px;
+        color: #334038;
+        font-size: 11px;
+        font-weight: 690;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 1px 1px rgba(22, 43, 33, 0.03);
+      }
+
+      .button:hover {
+        background: #f8faf8;
+      }
+
+      .button.primary {
+        color: #fff;
+        border-color: var(--forest);
+        background: var(--forest);
+      }
+
+      .button.primary:hover {
+        background: var(--forest-2);
+      }
+
+      .button.ghost {
+        border-color: transparent;
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .button.danger {
+        color: var(--red);
+        border-color: #efd0d0;
+        background: #fffafa;
+      }
+
+      .content-scroll {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+      }
+
+      .content {
+        width: 100%;
+        max-width: 1460px;
+        margin: 0 auto;
+        padding: 22px 24px 34px;
+      }
+
+      .page-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 18px;
+      }
+
+      .title-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 6px;
+        font-size: 25px;
+        line-height: 1.15;
+        letter-spacing: -0.035em;
+      }
+
+      h2 {
+        margin-bottom: 2px;
+        font-size: 14px;
+        letter-spacing: -0.01em;
+      }
+
+      h3 {
+        margin-bottom: 2px;
+        font-size: 12px;
+      }
+
+      .subtitle {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .source-path {
+        color: #56645c;
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+      }
+
+      .badge {
+        display: inline-flex;
+        height: 23px;
+        align-items: center;
+        gap: 6px;
+        padding: 0 8px;
+        color: #47544c;
+        font-size: 10px;
+        font-weight: 680;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+      }
+
+      .badge::before {
+        width: 6px;
+        height: 6px;
+        content: "";
+        border-radius: 50%;
+        background: #9ba69f;
+      }
+
+      .badge.healthy {
+        color: #176344;
+        border-color: #bee1ce;
+        background: var(--leaf-soft);
+      }
+
+      .badge.healthy::before {
+        background: #2aa66f;
+      }
+
+      .badge.warning {
+        color: #895013;
+        border-color: #f0d3aa;
+        background: var(--amber-soft);
+      }
+
+      .badge.warning::before {
+        background: #d28a31;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      .metric-card,
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: var(--panel);
+        box-shadow: 0 1px 0 rgba(20, 48, 35, 0.02);
+      }
+
+      .metric-card {
+        min-width: 0;
+        padding: 13px 14px;
+      }
+
+      .metric-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 690;
+        letter-spacing: 0.025em;
+        text-transform: uppercase;
+      }
+
+      .metric-value {
+        margin-top: 8px;
+        font-size: 20px;
+        font-weight: 735;
+        letter-spacing: -0.03em;
+      }
+
+      .metric-detail {
+        overflow: hidden;
+        margin-top: 4px;
+        color: var(--faint);
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .main-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.8fr) minmax(310px, 0.82fr);
+        gap: 14px;
+        align-items: start;
+      }
+
+      .secondary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        align-items: start;
+        margin-top: 14px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      .panel-header {
+        display: flex;
+        min-height: 53px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 11px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .panel-header p {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .environment-switcher {
+        display: inline-flex;
+        padding: 3px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel-soft);
+      }
+
+      .environment-switcher button {
+        height: 26px;
+        padding: 0 9px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+      }
+
+      .environment-switcher button.active {
+        color: var(--ink);
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(27, 56, 42, 0.1);
+      }
+
+      .table-wrap {
+        width: 100%;
+        overflow: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 10px 13px;
+        text-align: left;
+        border-bottom: 1px solid #edf1ee;
+        white-space: nowrap;
+      }
+
+      th {
+        color: var(--faint);
+        font-size: 9px;
+        font-weight: 760;
+        letter-spacing: 0.055em;
+        text-transform: uppercase;
+        background: #fafcfa;
+      }
+
+      td {
+        color: #39463e;
+        font-size: 10px;
+      }
+
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      tbody tr:hover td {
+        background: #fbfcfb;
+      }
+
+      .vm-name {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+
+      .provider-mark {
+        display: grid;
+        width: 26px;
+        height: 26px;
+        place-items: center;
+        color: #4e5b54;
+        font-size: 8px;
+        font-weight: 800;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel-soft);
+      }
+
+      .provider-mark.aws {
+        color: #93600f;
+        border-color: #efd7ad;
+        background: #fff8ec;
+      }
+
+      .provider-mark.azure {
+        color: #23659b;
+        border-color: #c6dcf0;
+        background: #f0f7fd;
+      }
+
+      .provider-mark.ali {
+        color: #aa3c32;
+        border-color: #ebcbc7;
+        background: #fff4f2;
+      }
+
+      .vm-copy strong,
+      .vm-copy small {
+        display: block;
+      }
+
+      .vm-copy strong {
+        color: var(--ink);
+        font-size: 11px;
+      }
+
+      .vm-copy small {
+        margin-top: 2px;
+        color: var(--faint);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 9px;
+      }
+
+      .version-chip {
+        display: inline-flex;
+        padding: 3px 6px;
+        color: #4d5c53;
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 9px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: #f7f9f7;
+      }
+
+      .resource-bar {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .resource-track {
+        width: 44px;
+        height: 4px;
+        overflow: hidden;
+        border-radius: 99px;
+        background: #e7ece8;
+      }
+
+      .resource-fill {
+        height: 100%;
+        border-radius: 99px;
+        background: #5e7d6c;
+      }
+
+      .icon-button {
+        display: grid;
+        width: 28px;
+        height: 28px;
+        place-items: center;
+        color: #617067;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #fff;
+      }
+
+      .timeline {
+        padding: 14px;
+      }
+
+      .timeline-item {
+        position: relative;
+        display: grid;
+        grid-template-columns: 20px 1fr auto;
+        gap: 9px;
+        min-height: 48px;
+      }
+
+      .timeline-item:not(:last-child)::after {
+        position: absolute;
+        top: 20px;
+        bottom: -2px;
+        left: 8px;
+        width: 1px;
+        content: "";
+        background: #d9e4dd;
+      }
+
+      .timeline-dot {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        width: 17px;
+        height: 17px;
+        place-items: center;
+        color: white;
+        font-size: 9px;
+        border-radius: 50%;
+        background: var(--leaf);
+      }
+
+      .timeline-dot.current {
+        color: var(--forest);
+        border: 2px solid #7acaa4;
+        background: #e7f5ed;
+        box-shadow: 0 0 0 4px #eef8f2;
+      }
+
+      .timeline-title {
+        margin-bottom: 3px;
+        font-size: 10px;
+        font-weight: 680;
+      }
+
+      .timeline-detail,
+      .timeline-time {
+        color: var(--faint);
+        font-size: 9px;
+      }
+
+      .deployment-summary {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        padding: 0 14px 14px;
+      }
+
+      .summary-tile {
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel-soft);
+      }
+
+      .summary-tile span,
+      .summary-tile strong {
+        display: block;
+      }
+
+      .summary-tile span {
+        color: var(--faint);
+        font-size: 9px;
+      }
+
+      .summary-tile strong {
+        margin-top: 3px;
+        font-size: 11px;
+      }
+
+      .log-panel {
+        overflow: hidden;
+        color: #c8d8cf;
+        border-color: #183e30;
+        background: #102a21;
+      }
+
+      .log-panel .panel-header {
+        border-color: rgba(255, 255, 255, 0.09);
+      }
+
+      .log-panel h2 {
+        color: #edf6f1;
+      }
+
+      .log-panel .panel-header p {
+        color: #84a394;
+      }
+
+      .log-actions {
+        display: flex;
+        gap: 6px;
+      }
+
+      .log-actions button {
+        height: 26px;
+        padding: 0 8px;
+        color: #9fb8aa;
+        font-size: 9px;
+        border: 1px solid rgba(255, 255, 255, 0.11);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .log-lines {
+        min-height: 132px;
+        padding: 12px 14px 14px;
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 9.5px;
+        line-height: 1.72;
+      }
+
+      .log-line {
+        display: grid;
+        grid-template-columns: 68px 112px 1fr;
+        gap: 10px;
+      }
+
+      .log-time {
+        color: #638474;
+      }
+
+      .log-host {
+        color: #75c29a;
+      }
+
+      .log-error {
+        color: #f0b5aa;
+      }
+
+      .section-tabs {
+        display: flex;
+        gap: 4px;
+        margin: -4px 0 14px;
+        padding: 4px;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: #eef2ef;
+      }
+
+      .section-tabs button {
+        height: 29px;
+        flex: 0 0 auto;
+        padding: 0 11px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+      }
+
+      .section-tabs button.active {
+        color: var(--forest);
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(23, 63, 49, 0.09);
+      }
+
+      .management-list,
+      .detail-list,
+      .version-list {
+        display: grid;
+      }
+
+      .management-row,
+      .detail-row,
+      .version-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 14px;
+        align-items: center;
+        min-height: 52px;
+        padding: 10px 14px;
+        border-bottom: 1px solid #edf1ee;
+      }
+
+      .management-row:last-child,
+      .detail-row:last-child,
+      .version-row:last-child {
+        border-bottom: 0;
+      }
+
+      .management-copy strong,
+      .management-copy small,
+      .detail-copy strong,
+      .detail-copy small,
+      .version-copy strong,
+      .version-copy small {
+        display: block;
+      }
+
+      .management-copy strong,
+      .detail-copy strong,
+      .version-copy strong {
+        color: var(--ink);
+        font-size: 10px;
+      }
+
+      .management-copy small,
+      .detail-copy small,
+      .version-copy small {
+        margin-top: 3px;
+        color: var(--faint);
+        font-size: 9px;
+      }
+
+      .management-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .code-value {
+        font-family: "Cascadia Code", Consolas, monospace;
+      }
+
+      .settings-layout {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+        gap: 18px;
+      }
+
+      .settings-nav {
+        position: sticky;
+        top: 0;
+        align-self: start;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: #fff;
+      }
+
+      .settings-nav button {
+        display: flex;
+        width: 100%;
+        height: 36px;
+        align-items: center;
+        gap: 9px;
+        padding: 0 10px;
+        color: var(--muted);
+        text-align: left;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+      }
+
+      .settings-nav button.active {
+        color: var(--forest);
+        font-weight: 680;
+        background: var(--leaf-soft);
+      }
+
+      .settings-nav button span:first-child {
+        width: 18px;
+        color: var(--faint);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+      }
+
+      .settings-stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      .settings-card {
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: #fff;
+      }
+
+      .settings-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 14px 15px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .settings-card-header p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .settings-card-body {
+        padding: 15px;
+      }
+
+      .workspace-field {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 8px;
+      }
+
+      .fake-input {
+        display: flex;
+        height: 38px;
+        min-width: 0;
+        align-items: center;
+        gap: 9px;
+        padding: 0 11px;
+        color: #405047;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        background: #fbfcfb;
+      }
+
+      .fake-input code {
+        overflow: hidden;
+        flex: 1;
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .workspace-health {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 11px;
+      }
+
+      .health-item {
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel-soft);
+      }
+
+      .health-item span,
+      .health-item strong {
+        display: block;
+      }
+
+      .health-item span {
+        color: var(--faint);
+        font-size: 9px;
+      }
+
+      .health-item strong {
+        margin-top: 4px;
+        font-size: 11px;
+      }
+
+      .credential-list {
+        display: grid;
+      }
+
+      .credential-row {
+        display: grid;
+        grid-template-columns: minmax(220px, 1.3fr) minmax(150px, 0.8fr) minmax(130px, 0.7fr) auto;
+        gap: 14px;
+        align-items: center;
+        min-height: 60px;
+        padding: 10px 15px;
+        border-bottom: 1px solid #edf1ee;
+      }
+
+      .credential-row:last-child {
+        border-bottom: 0;
+      }
+
+      .credential-main {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .credential-logo {
+        display: grid;
+        width: 31px;
+        height: 31px;
+        flex: 0 0 auto;
+        place-items: center;
+        color: var(--forest);
+        font-size: 9px;
+        font-weight: 800;
+        border: 1px solid #cbded3;
+        border-radius: 8px;
+        background: #f1f8f4;
+      }
+
+      .credential-copy {
+        min-width: 0;
+      }
+
+      .credential-copy strong,
+      .credential-copy small {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .credential-copy strong {
+        font-size: 11px;
+      }
+
+      .credential-copy small,
+      .credential-meta {
+        margin-top: 3px;
+        color: var(--faint);
+        font-size: 9px;
+      }
+
+      .credential-status {
+        display: inline-flex;
+        width: max-content;
+        align-items: center;
+        gap: 6px;
+        color: #28734f;
+        font-size: 9px;
+        font-weight: 680;
+      }
+
+      .credential-status::before {
+        width: 6px;
+        height: 6px;
+        content: "";
+        border-radius: 50%;
+        background: #39aa74;
+      }
+
+      .credential-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 6px;
+      }
+
+      .provider-cards {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 9px;
+      }
+
+      .provider-card {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: #fbfcfb;
+      }
+
+      .provider-card-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .provider-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .provider-card p {
+        margin: 10px 0 12px;
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.5;
+      }
+
+      .provider-card-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding-top: 9px;
+        border-top: 1px solid var(--line);
+      }
+
+      .masked-secret {
+        color: var(--faint);
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 9px;
+      }
+
+      .settings-note {
+        display: flex;
+        gap: 9px;
+        margin-top: 11px;
+        padding: 10px 11px;
+        color: #55665c;
+        font-size: 9px;
+        line-height: 1.5;
+        border: 1px solid #d8e4dc;
+        border-radius: 8px;
+        background: #f5f9f6;
+      }
+
+      .settings-note strong {
+        color: var(--forest);
+      }
+
+      .toast {
+        position: fixed;
+        right: 22px;
+        bottom: 22px;
+        z-index: 20;
+        display: flex;
+        max-width: 360px;
+        align-items: center;
+        gap: 9px;
+        padding: 11px 13px;
+        color: #e9f5ef;
+        font-size: 11px;
+        border: 1px solid #32624d;
+        border-radius: 9px;
+        background: #173c2f;
+        box-shadow: var(--shadow);
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(10px);
+        transition: 180ms ease;
+      }
+
+      .toast.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      @media (max-width: 1180px) {
+        .app-shell {
+          grid-template-columns: 220px minmax(0, 1fr);
+        }
+
+        .metric-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .main-grid,
+        .secondary-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .provider-cards {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none">
+              <path d="M8 18.5C8 12.7 12.7 8 18.5 8H25v5.1C25 18.6 20.6 23 15.1 23H8v-4.5Z" fill="#b9ebd0" stroke="#55c58e" stroke-width="1.7" />
+              <path d="M9.5 23c4.5-4.8 8.9-8.1 14.2-10.3" stroke="#55c58e" stroke-linecap="round" stroke-width="1.7" />
+            </svg>
+          </div>
+          <div>
+            <p class="brand-name">Grove</p>
+            <p class="brand-subtitle">Environments</p>
+          </div>
+        </div>
+
+        <div class="workspace-pill">
+          <div class="workspace-pill-top">
+            <span class="eyebrow-light">Workspace</span>
+            <span class="workspace-state">Healthy</span>
+          </div>
+          <div class="workspace-name">Primary workspace</div>
+          <div class="workspace-path">D:\grove-workspace</div>
+        </div>
+
+        <nav class="primary-nav" aria-label="Primary navigation">
+          <button class="nav-button" data-view-target="virtualMachine" type="button">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="2" /><rect x="4" y="14" width="16" height="6" rx="2" /><path d="M8 7h.01M8 17h.01M12 7h5M12 17h5" /></svg>
+            </span>
+            <span class="nav-label">Virtual machines</span>
+            <span class="nav-count">5</span>
+          </button>
+          <button class="nav-button active" data-view-target="application" type="button">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9Z" /><path d="m4.5 7.8 7.5 4.3 7.5-4.3M12 12.1V21" /></svg>
+            </span>
+            <span class="nav-label">Applications</span>
+            <span class="nav-count">3</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-context active" data-sidebar-context="application">
+          <div class="sidebar-section-title">
+            <span>Applications</span>
+            <button type="button" data-mock-action="New application" aria-label="Add application">+</button>
+          </div>
+          <div class="app-list">
+            <button class="app-list-item active" type="button">
+              <span class="app-glyph">EX</span>
+              <span class="app-copy"><strong>example-api</strong><small>Healthy · v23 · 3 VMs</small></span>
+              <span class="mini-health" aria-label="Healthy"></span>
+            </button>
+            <button class="app-list-item" type="button" data-mock-action="Open web-console">
+              <span class="app-glyph">WC</span>
+              <span class="app-copy"><strong>web-console</strong><small>Healthy · v11 · 2 VMs</small></span>
+              <span class="mini-health" aria-label="Healthy"></span>
+            </button>
+            <button class="app-list-item" type="button" data-mock-action="Open ingest-worker">
+              <span class="app-glyph">IW</span>
+              <span class="app-copy"><strong>ingest-worker</strong><small>Degraded · v8 · 1 VM</small></span>
+              <span class="mini-health" style="background:#d28a31" aria-label="Warning"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="sidebar-context" data-sidebar-context="virtualMachine">
+          <div class="sidebar-section-title">
+            <span>All virtual machines</span>
+            <button type="button" data-mock-action="Add virtual machine" aria-label="Add virtual machine">+</button>
+          </div>
+          <div class="app-list">
+            <button class="app-list-item active" type="button">
+              <span class="app-glyph">AWS</span>
+              <span class="app-copy"><strong>prod-aws-01</strong><small>Running · 3 applications</small></span>
+              <span class="mini-health" aria-label="Online"></span>
+            </button>
+            <button class="app-list-item" type="button" data-mock-action="Open prod-azure-01">
+              <span class="app-glyph">AZ</span>
+              <span class="app-copy"><strong>prod-azure-01</strong><small>Running · 2 applications</small></span>
+              <span class="mini-health" aria-label="Online"></span>
+            </button>
+            <button class="app-list-item" type="button" data-mock-action="Open prod-cn-01">
+              <span class="app-glyph">ALI</span>
+              <span class="app-copy"><strong>prod-cn-01</strong><small>Running · 2 applications</small></span>
+              <span class="mini-health" aria-label="Online"></span>
+            </button>
+            <button class="app-list-item" type="button" data-mock-action="Open staging-aws-01">
+              <span class="app-glyph">AWS</span>
+              <span class="app-copy"><strong>staging-aws-01</strong><small>Running · 1 application</small></span>
+              <span class="mini-health" aria-label="Online"></span>
+            </button>
+            <button class="app-list-item" type="button" data-mock-action="Open tools-azure-01">
+              <span class="app-glyph">AZ</span>
+              <span class="app-copy"><strong>tools-azure-01</strong><small>Stopped · 0 applications</small></span>
+              <span class="mini-health offline" aria-label="Stopped"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="sidebar-spacer"></div>
+        <nav class="bottom-nav" aria-label="Secondary navigation">
+          <button class="nav-button" data-view-target="settings" type="button">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-4v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h4v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></svg>
+            </span>
+            <span class="nav-label">Settings</span>
+            <span class="nav-count">5</span>
+          </button>
+        </nav>
+      </aside>
+
+      <main class="main-shell">
+        <section class="view" id="virtual-machine-view">
+          <header class="topbar">
+            <div class="breadcrumb"><span>Virtual machines</span><span>/</span><strong>prod-aws-01</strong></div>
+            <div class="topbar-actions">
+              <button class="button" type="button" data-mock-action="Open SSH terminal">SSH terminal</button>
+              <button class="button" type="button" data-mock-action="Restart prod-aws-01">Restart</button>
+              <button class="button ghost" type="button" data-mock-action="Virtual machine menu">•••</button>
+            </div>
+          </header>
+
+          <div class="content-scroll">
+            <div class="content">
+              <div class="page-header">
+                <div>
+                  <div class="title-row">
+                    <h1>prod-aws-01</h1>
+                    <span class="badge healthy">Running · SSH connected</span>
+                  </div>
+                  <p class="subtitle">AWS EC2 · ap-northeast-1 · Ubuntu 24.04 LTS</p>
+                  <p class="source-path">ubuntu@18.183.92.197 · ~/grove</p>
+                </div>
+                <button class="button" type="button" data-mock-action="Refresh machine state">Refresh status</button>
+              </div>
+
+              <nav class="section-tabs" aria-label="Virtual machine sections">
+                <button class="active" type="button">Overview</button>
+                <button type="button" data-mock-action="VM applications">Applications</button>
+                <button type="button" data-mock-action="VM logs">Logs</button>
+                <button type="button" data-mock-action="VM terminal">Terminal</button>
+                <button type="button" data-mock-action="VM files">Files</button>
+                <button type="button" data-mock-action="VM activity">Activity</button>
+                <button type="button" data-mock-action="VM configuration">Configuration</button>
+              </nav>
+
+              <div class="metric-grid">
+                <article class="metric-card">
+                  <div class="metric-label"><span>Machine status</span><span style="color:#23825b">Running</span></div>
+                  <div class="metric-value">21d 6h</div>
+                  <div class="metric-detail">Provider and SSH checks passed</div>
+                </article>
+                <article class="metric-card">
+                  <div class="metric-label"><span>Applications</span><span>systemd</span></div>
+                  <div class="metric-value">3 / 3</div>
+                  <div class="metric-detail">All managed services healthy</div>
+                </article>
+                <article class="metric-card">
+                  <div class="metric-label"><span>CPU</span><span>4 vCPU</span></div>
+                  <div class="metric-value">34%</div>
+                  <div class="metric-detail">Load average 1.18 · 0.96 · 0.82</div>
+                </article>
+                <article class="metric-card">
+                  <div class="metric-label"><span>Memory</span><span>8 GB</span></div>
+                  <div class="metric-value">61%</div>
+                  <div class="metric-detail">4.9 GB used · disk 38%</div>
+                </article>
+              </div>
+
+              <div class="main-grid">
+                <div class="stack">
+                  <section class="panel">
+                    <div class="panel-header">
+                      <div><h2>Applications on this VM</h2><p>Observed service state and deployed version</p></div>
+                      <button class="button" type="button" data-mock-action="Deploy application to VM">Deploy application</button>
+                    </div>
+                    <div class="table-wrap">
+                      <table>
+                        <thead><tr><th>Application</th><th>Service</th><th>Version</th><th>Uptime</th><th></th></tr></thead>
+                        <tbody>
+                          <tr>
+                            <td><div class="vm-name"><span class="app-glyph" style="color:#315d49;border-color:#d7e6dc;background:#f1f8f4">EX</span><span class="vm-copy"><strong>example-api</strong><small>production</small></span></div></td>
+                            <td><span class="badge healthy">Running</span></td><td><span class="version-chip">v23</span></td><td>21d</td>
+                            <td><button class="icon-button" type="button" data-mock-action="Manage example-api service">→</button></td>
+                          </tr>
+                          <tr>
+                            <td><div class="vm-name"><span class="app-glyph" style="color:#315d49;border-color:#d7e6dc;background:#f1f8f4">WC</span><span class="vm-copy"><strong>web-console</strong><small>production</small></span></div></td>
+                            <td><span class="badge healthy">Running</span></td><td><span class="version-chip">v11</span></td><td>12d</td>
+                            <td><button class="icon-button" type="button" data-mock-action="Manage web-console service">→</button></td>
+                          </tr>
+                          <tr>
+                            <td><div class="vm-name"><span class="app-glyph" style="color:#315d49;border-color:#d7e6dc;background:#f1f8f4">IW</span><span class="vm-copy"><strong>ingest-worker</strong><small>production</small></span></div></td>
+                            <td><span class="badge healthy">Running</span></td><td><span class="version-chip">v8</span></td><td>4d</td>
+                            <td><button class="icon-button" type="button" data-mock-action="Manage ingest-worker service">→</button></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                  <section class="panel log-panel">
+                    <div class="panel-header">
+                      <div><h2>Machine and service logs</h2><p>Live · journal and Grove operations</p></div>
+                      <div class="log-actions"><button type="button">Pause</button><button type="button">Filter</button><button type="button">Download</button></div>
+                    </div>
+                    <div class="log-lines">
+                      <div class="log-line"><span class="log-time">14:31:02</span><span class="log-host">system</span><span>grove-agent health probe completed status=healthy</span></div>
+                      <div class="log-line"><span class="log-time">14:31:05</span><span class="log-host">example-api</span><span>GET /healthz 200 9ms</span></div>
+                      <div class="log-line"><span class="log-time">14:31:07</span><span class="log-host">web-console</span><span>asset cache refresh completed entries=128</span></div>
+                      <div class="log-line"><span class="log-time">14:31:12</span><span class="log-host">sshd</span><span>session opened for user ubuntu</span></div>
+                      <div class="log-line"><span class="log-time">14:31:18</span><span class="log-host">system</span><span>disk usage 38% inode usage 12%</span></div>
+                    </div>
+                  </section>
+                </div>
+
+                <div class="stack">
+                  <section class="panel">
+                    <div class="panel-header"><div><h2>Machine management</h2><p>Provider API and SSH controls</p></div><span class="badge healthy">Ready</span></div>
+                    <div class="management-list">
+                      <div class="management-row"><div class="management-copy"><strong>Power and machine state</strong><small>AWS API · last checked 12 seconds ago</small></div><div class="management-actions"><button class="button" type="button" data-mock-action="Restart VM">Restart</button><button class="button danger" type="button" data-mock-action="Stop VM">Stop</button></div></div>
+                      <div class="management-row"><div class="management-copy"><strong>SSH command execution</strong><small>default-ed25519 · host key verified</small></div><button class="button" type="button" data-mock-action="Open terminal">Open terminal</button></div>
+                      <div class="management-row"><div class="management-copy"><strong>Application services</strong><small>Start, stop, restart, and inspect systemd units</small></div><button class="button" type="button" data-mock-action="Manage services">Manage</button></div>
+                      <div class="management-row"><div class="management-copy"><strong>Remote workspace</strong><small class="code-value">~/grove · 6.4 GB · verified</small></div><button class="button" type="button" data-mock-action="Browse remote files">Browse files</button></div>
+                      <div class="management-row"><div class="management-copy"><strong>Management configuration</strong><small>Credential, provider mapping, monitoring, and tags</small></div><button class="button" type="button" data-mock-action="Edit VM configuration">Edit</button></div>
+                    </div>
+                  </section>
+
+                  <section class="panel">
+                    <div class="panel-header"><div><h2>Recent VM activity</h2><p>Commands and state changes</p></div><button class="button" type="button" data-mock-action="View all VM activity">View all</button></div>
+                    <div class="timeline">
+                      <div class="timeline-item"><span class="timeline-dot">✓</span><div><div class="timeline-title">Status and metrics refreshed</div><div class="timeline-detail">Provider API + SSH · Grove</div></div><span class="timeline-time">14:31</span></div>
+                      <div class="timeline-item"><span class="timeline-dot">✓</span><div><div class="timeline-title">example-api v23 deployed</div><div class="timeline-detail">Health check passed · edward</div></div><span class="timeline-time">14:04</span></div>
+                      <div class="timeline-item"><span class="timeline-dot">✓</span><div><div class="timeline-title">Security updates inspected</div><div class="timeline-detail">No reboot required · Grove</div></div><span class="timeline-time">Yesterday</span></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view active" id="application-view">
+          <header class="topbar">
+            <div class="breadcrumb"><span>Applications</span><span>/</span><strong>example-api</strong></div>
+            <div class="topbar-actions">
+              <button class="button" type="button" data-mock-action="Open source folder">Open source</button>
+              <button class="button" type="button" data-mock-action="Build version 24">Build new version</button>
+              <button class="button primary" type="button" data-mock-action="Deploy version 23">Deploy version 23</button>
+            </div>
+          </header>
+
+          <div class="content-scroll">
+            <div class="content">
+              <div class="page-header">
+                <div>
+                  <div class="title-row">
+                    <h1>example-api</h1>
+                    <span class="badge healthy">All environments healthy</span>
+                  </div>
+                  <p class="subtitle">Local source · Node.js 22 · Linux amd64</p>
+                  <p class="source-path">D:\grove-workspace\example-api\source</p>
+                </div>
+                <button class="button ghost" type="button" data-mock-action="Application menu">•••</button>
+              </div>
+
+              <nav class="section-tabs" aria-label="Application sections">
+                <button class="active" type="button">Overview</button>
+                <button type="button" data-mock-action="Application configuration">Configuration</button>
+                <button type="button" data-mock-action="Application deployments">Deployments</button>
+                <button type="button" data-mock-action="Application versions">Versions</button>
+                <button type="button" data-mock-action="Application deployed VMs">Deployed VMs</button>
+                <button type="button" data-mock-action="Application logs">Logs</button>
+              </nav>
+
+              <div class="metric-grid">
+                <article class="metric-card">
+                  <div class="metric-label"><span>Active version</span><span>Local build</span></div>
+                  <div class="metric-value">v23</div>
+                  <div class="metric-detail">01K0Y9R4 · sha256:4d18…9e2a</div>
+                </article>
+                <article class="metric-card">
+                  <div class="metric-label"><span>Target VMs</span><span>Production</span></div>
+                  <div class="metric-value">3 / 3</div>
+                  <div class="metric-detail">AWS · Azure · Alibaba Cloud</div>
+                </article>
+                <article class="metric-card">
+                  <div class="metric-label"><span>Application health</span><span style="color:#23825b">Healthy</span></div>
+                  <div class="metric-value">100%</div>
+                  <div class="metric-detail">Median health latency 42 ms</div>
+                </article>
+                <article class="metric-card">
+                  <div class="metric-label"><span>Last build</span><span>4m 21s</span></div>
+                  <div class="metric-value">18 min</div>
+                  <div class="metric-detail">WSL · npm ci · npm run build</div>
+                </article>
+              </div>
+
+              <div class="main-grid">
+                <div class="stack">
+                  <section class="panel">
+                    <div class="panel-header">
+                      <div>
+                        <h2>Production environment</h2>
+                        <p>Rolling deployment · minimum 2 healthy targets</p>
+                      </div>
+                      <div class="environment-switcher" aria-label="Environment selector">
+                        <button class="active" type="button">Production</button>
+                        <button type="button" data-mock-action="Switch to staging">Staging</button>
+                        <button type="button" data-mock-action="Switch to dev">Dev</button>
+                      </div>
+                    </div>
+                    <div class="table-wrap">
+                      <table>
+                        <thead>
+                          <tr><th>Virtual machine</th><th>Application</th><th>Version</th><th>CPU</th><th>Memory</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td><div class="vm-name"><span class="provider-mark aws">AWS</span><span class="vm-copy"><strong>prod-aws-01</strong><small>18.183.92.197</small></span></div></td>
+                            <td><span class="badge healthy">Running · 21d</span></td>
+                            <td><span class="version-chip">v23</span></td>
+                            <td><div class="resource-bar"><div class="resource-track"><div class="resource-fill" style="width:34%"></div></div><span>34%</span></div></td>
+                            <td>61%</td>
+                            <td><button class="icon-button" type="button" data-mock-action="Open prod-aws-01">→</button></td>
+                          </tr>
+                          <tr>
+                            <td><div class="vm-name"><span class="provider-mark azure">AZ</span><span class="vm-copy"><strong>prod-azure-01</strong><small>20.24.108.41</small></span></div></td>
+                            <td><span class="badge healthy">Running · 21d</span></td>
+                            <td><span class="version-chip">v23</span></td>
+                            <td><div class="resource-bar"><div class="resource-track"><div class="resource-fill" style="width:27%"></div></div><span>27%</span></div></td>
+                            <td>58%</td>
+                            <td><button class="icon-button" type="button" data-mock-action="Open prod-azure-01">→</button></td>
+                          </tr>
+                          <tr>
+                            <td><div class="vm-name"><span class="provider-mark ali">ALI</span><span class="vm-copy"><strong>prod-cn-01</strong><small>47.98.121.66</small></span></div></td>
+                            <td><span class="badge healthy">Running · 20d</span></td>
+                            <td><span class="version-chip">v23</span></td>
+                            <td><div class="resource-bar"><div class="resource-track"><div class="resource-fill" style="width:42%"></div></div><span>42%</span></div></td>
+                            <td>66%</td>
+                            <td><button class="icon-button" type="button" data-mock-action="Open prod-cn-01">→</button></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                  <section class="panel log-panel">
+                    <div class="panel-header">
+                      <div><h2>Combined application logs</h2><p>Live · all production targets</p></div>
+                      <div class="log-actions"><button type="button">Pause</button><button type="button">Search</button><button type="button">Download</button></div>
+                    </div>
+                    <div class="log-lines">
+                      <div class="log-line"><span class="log-time">14:24:08</span><span class="log-host">prod-aws-01</span><span>GET /healthz 200 11ms</span></div>
+                      <div class="log-line"><span class="log-time">14:24:09</span><span class="log-host">prod-azure-01</span><span>request.completed route=/v1/accounts status=200 duration=38ms</span></div>
+                      <div class="log-line"><span class="log-time">14:24:10</span><span class="log-host">prod-cn-01</span><span>cache.hit key=account:summary region=cn-hangzhou</span></div>
+                      <div class="log-line"><span class="log-time">14:24:11</span><span class="log-host">prod-aws-01</span><span>queue.poll completed messages=4</span></div>
+                      <div class="log-line"><span class="log-time">14:24:12</span><span class="log-host">prod-cn-01</span><span class="log-error">warn upstream latency exceeded 250ms route=/v1/reports</span></div>
+                    </div>
+                  </section>
+                </div>
+
+                <div class="stack">
+                  <section class="panel">
+                    <div class="panel-header"><div><h2>Latest deployment</h2><p>v23 · rolling · completed</p></div><span class="badge healthy">Healthy</span></div>
+                    <div class="timeline">
+                      <div class="timeline-item"><span class="timeline-dot">✓</span><div><div class="timeline-title">Preflight and upload</div><div class="timeline-detail">3 targets verified · 18.4 MB</div></div><span class="timeline-time">14:02</span></div>
+                      <div class="timeline-item"><span class="timeline-dot">✓</span><div><div class="timeline-title">prod-aws-01</div><div class="timeline-detail">Activated and healthy · 38 ms</div></div><span class="timeline-time">14:04</span></div>
+                      <div class="timeline-item"><span class="timeline-dot">✓</span><div><div class="timeline-title">prod-azure-01</div><div class="timeline-detail">Activated and healthy · 44 ms</div></div><span class="timeline-time">14:06</span></div>
+                      <div class="timeline-item"><span class="timeline-dot">✓</span><div><div class="timeline-title">prod-cn-01</div><div class="timeline-detail">Activated and healthy · 51 ms</div></div><span class="timeline-time">14:09</span></div>
+                    </div>
+                    <div class="deployment-summary">
+                      <div class="summary-tile"><span>Duration</span><strong>7m 14s</strong></div>
+                      <div class="summary-tile"><span>Previous</span><strong>v22 protected</strong></div>
+                    </div>
+                  </section>
+
+                  <section class="panel">
+                    <div class="panel-header"><div><h2>Public access</h2><p>Name.com · primary-dns</p></div><button class="button" type="button" data-mock-action="Edit domain">Edit</button></div>
+                    <div style="padding:14px">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px"><div><strong style="font-size:11px">api.example.com</strong><div class="credential-meta">3 A records · TLS valid</div></div><span class="badge healthy">Online</span></div>
+                      <div class="settings-note" style="margin-top:0"><span>i</span><span>Basic multi-A distribution is active. Health-aware load balancing is planned for a later milestone.</span></div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+
+              <div class="secondary-grid">
+                <section class="panel">
+                  <div class="panel-header"><div><h2>Version history</h2><p>Immutable local builds and rollback points</p></div><button class="button" type="button" data-mock-action="View all versions">View all</button></div>
+                  <div class="version-list">
+                    <div class="version-row"><div class="version-copy"><strong>v23 · active</strong><small>01K0Y9R4 · built 18 min ago · 18.4 MB</small></div><span class="badge healthy">Deployed</span></div>
+                    <div class="version-row"><div class="version-copy"><strong>v22 · previous</strong><small>01K0WZE2 · built 6 days ago · protected</small></div><button class="button" type="button" data-mock-action="Deploy version 22">Deploy</button></div>
+                    <div class="version-row"><div class="version-copy"><strong>v21</strong><small>01K0QG7B · built 19 days ago · retained</small></div><button class="button" type="button" data-mock-action="Open version 21">Inspect</button></div>
+                  </div>
+                </section>
+
+                <section class="panel">
+                  <div class="panel-header"><div><h2>Application configuration</h2><p>Source, build, runtime, and health settings</p></div><button class="button" type="button" data-mock-action="Edit application configuration">Edit</button></div>
+                  <div class="detail-list">
+                    <div class="detail-row"><div class="detail-copy"><strong>Source</strong><small class="code-value">local · D:\projects\example-api</small></div><span class="badge">Synced</span></div>
+                    <div class="detail-row"><div class="detail-copy"><strong>Build</strong><small class="code-value">npm ci && npm run build</small></div><span class="credential-meta">WSL · Node 22</span></div>
+                    <div class="detail-row"><div class="detail-copy"><strong>Runtime</strong><small class="code-value">node dist/server.js · port 8080</small></div><span class="credential-meta">systemd</span></div>
+                    <div class="detail-row"><div class="detail-copy"><strong>Health check</strong><small class="code-value">GET /healthz · 30s · 3 retries</small></div><span class="badge healthy">Passing</span></div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="settings-view">
+          <header class="topbar">
+            <div class="breadcrumb"><strong>Grove settings</strong><span>/</span><span>Workspace and credentials</span></div>
+            <div class="topbar-actions"><span class="badge healthy">5 profiles healthy</span><button class="button" type="button" data-view-return>Close settings</button></div>
+          </header>
+
+          <div class="content-scroll">
+            <div class="content">
+              <div class="page-header">
+                <div><h1>Settings</h1><p class="subtitle">Manage Grove's local workspace and reusable credential profiles.</p></div>
+                <button class="button" type="button" data-mock-action="Export diagnostics">Export diagnostics</button>
+              </div>
+
+              <div class="settings-layout">
+                <nav class="settings-nav" aria-label="Settings sections">
+                  <button class="active" type="button"><span>01</span>Workspace</button>
+                  <button type="button"><span>02</span>SSH credentials</button>
+                  <button type="button"><span>03</span>Cloud providers</button>
+                  <button type="button"><span>04</span>Name.com</button>
+                  <button type="button"><span>05</span>Copilot</button>
+                  <button type="button"><span>06</span>Appearance</button>
+                </nav>
+
+                <div class="settings-stack">
+                  <section class="settings-card">
+                    <div class="settings-card-header"><div><h2>Local workspace</h2><p>Grove manages source, versions, artifacts, Terraform state, and operation history here.</p></div><span class="badge healthy">Healthy</span></div>
+                    <div class="settings-card-body">
+                      <div class="workspace-field">
+                        <div class="fake-input"><span aria-hidden="true">▣</span><code>D:\grove-workspace</code></div>
+                        <button class="button" type="button" data-mock-action="Relocate workspace">Relocate…</button>
+                        <button class="button" type="button" data-mock-action="Reveal workspace">Reveal</button>
+                      </div>
+                      <div class="workspace-health">
+                        <div class="health-item"><span>Applications</span><strong>3</strong></div>
+                        <div class="health-item"><span>Versions</span><strong>42</strong></div>
+                        <div class="health-item"><span>Used space</span><strong>8.7 GB</strong></div>
+                        <div class="health-item"><span>Available</span><strong>142 GB</strong></div>
+                      </div>
+                      <div class="settings-note"><span>✓</span><span><strong>No action required.</strong> Workspace schema, locks, artifact checksums, and environment state were verified 6 minutes ago.</span></div>
+                    </div>
+                  </section>
+
+                  <section class="settings-card">
+                    <div class="settings-card-header"><div><h2>SSH credentials</h2><p>Reusable connection profiles for existing and Terraform-managed VMs.</p></div><button class="button" type="button" data-mock-action="Add SSH credential">Add credential</button></div>
+                    <div class="credential-list">
+                      <div class="credential-row">
+                        <div class="credential-main"><span class="credential-logo">SSH</span><span class="credential-copy"><strong>default-ed25519</strong><small>Grove-generated · SHA256:f4Rs…19a</small></span></div>
+                        <div><div class="credential-status">Tested</div><div class="credential-meta">4 VMs · 18 min ago</div></div>
+                        <div class="credential-meta">Default profile</div>
+                        <div class="credential-actions"><button class="button" type="button" data-mock-action="Test SSH profile">Test</button><button class="icon-button" type="button">•••</button></div>
+                      </div>
+                      <div class="credential-row">
+                        <div class="credential-main"><span class="credential-logo">SSH</span><span class="credential-copy"><strong>china-operations</strong><small>Imported key · SHA256:be71…d04</small></span></div>
+                        <div><div class="credential-status">Tested</div><div class="credential-meta">1 VM · yesterday</div></div>
+                        <div class="credential-meta">Alibaba Cloud CN</div>
+                        <div class="credential-actions"><button class="button" type="button" data-mock-action="Test SSH profile">Test</button><button class="icon-button" type="button">•••</button></div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="settings-card">
+                    <div class="settings-card-header"><div><h2>Cloud providers</h2><p>Credentials are supplied to provider APIs and Terraform only for the active operation.</p></div><button class="button" type="button" data-mock-action="Add cloud profile">Add provider</button></div>
+                    <div class="settings-card-body">
+                      <div class="provider-cards">
+                        <article class="provider-card">
+                          <div class="provider-card-top"><div class="provider-title"><span class="provider-mark aws">AWS</span>AWS production</div><span class="credential-status">Connected</span></div>
+                          <p>Account 6382…1094<br />Profile + assumed role · ap-northeast-1</p>
+                          <div class="provider-card-footer"><span class="masked-secret">profile: grove-prod</span><button class="button" type="button" data-mock-action="Manage AWS profile">Manage</button></div>
+                        </article>
+                        <article class="provider-card">
+                          <div class="provider-card-top"><div class="provider-title"><span class="provider-mark azure">AZ</span>Azure sandbox</div><span class="credential-status">Connected</span></div>
+                          <p>Subscription 91fa…4d2c<br />Service principal · Japan East</p>
+                          <div class="provider-card-footer"><span class="masked-secret">secret: ••••••••</span><button class="button" type="button" data-mock-action="Manage Azure profile">Manage</button></div>
+                        </article>
+                        <article class="provider-card">
+                          <div class="provider-card-top"><div class="provider-title"><span class="provider-mark ali">ALI</span>Alibaba China</div><span class="credential-status">Connected</span></div>
+                          <p>RAM user grove-deployer<br />AccessKey · cn-hangzhou</p>
+                          <div class="provider-card-footer"><span class="masked-secret">LTAI••••9X2C</span><button class="button" type="button" data-mock-action="Manage Alibaba profile">Manage</button></div>
+                        </article>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="settings-card">
+                    <div class="settings-card-header"><div><h2>Name.com</h2><p>DNS profiles used by public application environments.</p></div><button class="button" type="button" data-mock-action="Add Name.com profile">Add profile</button></div>
+                    <div class="credential-list">
+                      <div class="credential-row">
+                        <div class="credential-main"><span class="credential-logo">DNS</span><span class="credential-copy"><strong>primary-dns</strong><small>edward · 4 accessible domains</small></span></div>
+                        <div><div class="credential-status">Connected</div><div class="credential-meta">Tested 18 min ago</div></div>
+                        <div class="credential-meta">2 environments</div>
+                        <div class="credential-actions"><button class="button" type="button" data-mock-action="Test Name.com profile">Test</button><button class="icon-button" type="button">•••</button></div>
+                      </div>
+                    </div>
+                    <div style="padding:0 15px 15px"><div class="settings-note"><span>⌁</span><span>Secret values are stored in the operating-system credential vault. Deleting an in-use profile requires reassignment and never deletes DNS records.</span></div></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"><span>✓</span><span id="toast-message">Mock action</span></div>
+
+    <script>
+      const views = {
+        application: document.getElementById('application-view'),
+        virtualMachine: document.getElementById('virtual-machine-view'),
+        settings: document.getElementById('settings-view'),
+      }
+      const viewButtons = [...document.querySelectorAll('[data-view-target]')]
+      const primaryViewButtons = [...document.querySelectorAll('.sidebar [data-view-target]')]
+      const sidebarContexts = [...document.querySelectorAll('[data-sidebar-context]')]
+      const returnButtons = [...document.querySelectorAll('[data-view-return]')]
+      const toast = document.getElementById('toast')
+      const toastMessage = document.getElementById('toast-message')
+      let lastOperationalView = 'application'
+      let toastTimer
+
+      function showView(name) {
+        if (name === 'application' || name === 'virtualMachine') lastOperationalView = name
+        Object.entries(views).forEach(([key, element]) => element.classList.toggle('active', key === name))
+        primaryViewButtons.forEach((button) => button.classList.toggle('active', button.dataset.viewTarget === name))
+        const contextName = name === 'settings' ? lastOperationalView : name
+        sidebarContexts.forEach((context) => context.classList.toggle('active', context.dataset.sidebarContext === contextName))
+      }
+
+      function showToast(message) {
+        toastMessage.textContent = `${message} — static mockup only`
+        toast.classList.add('visible')
+        clearTimeout(toastTimer)
+        toastTimer = setTimeout(() => toast.classList.remove('visible'), 2200)
+      }
+
+      viewButtons.forEach((button) => button.addEventListener('click', () => showView(button.dataset.viewTarget)))
+      returnButtons.forEach((button) => button.addEventListener('click', () => showView(lastOperationalView)))
+      document.querySelectorAll('[data-mock-action]').forEach((button) =>
+        button.addEventListener('click', () => showToast(button.dataset.mockAction)),
+      )
+    </script>
+  </body>
+</html>

@@ -1,8 +1,19 @@
 import type {
   ActionProposal,
   AppSnapshot,
+  ApplicationEnvironment,
+  ApplicationEnvironmentInput,
+  ApplicationDeployment,
+  ApplicationVersion,
   AppRunnerService,
   AppRunnerServiceInput,
+  AwsCredentialCsvImport,
+  CloudFirewallRule,
+  CloudFirewallRuleInput,
+  CloudInventory,
+  CloudMachine,
+  CloudMachineMetrics,
+  CloudMachinePowerAction,
   CommandRun,
   CopilotInstallState,
   CopilotPermissionDecision,
@@ -10,7 +21,15 @@ import type {
   CopilotProviderStatus,
   CopilotRuntimeStatus,
   CopilotScope,
+  CredentialProfile,
+  CredentialProfileInput,
+  CredentialProfileTestResult,
   FileNode,
+  GroveApplication,
+  GroveApplicationInput,
+  GroveSettings,
+  InfrastructureOperation,
+  TerraformRuntimeStatus,
   LocalDefaults,
   ServerEvent,
   TabId,
@@ -92,6 +111,156 @@ export function getBootstrap() {
 
 export function getSnapshot() {
   return requestJson<AppSnapshot>('/api/snapshot')
+}
+
+export function getGroveSettings() {
+  return requestJson<GroveSettings>('/api/settings')
+}
+
+export function relocateWorkspace(workspacePath: string) {
+  return requestJson<GroveSettings>('/api/settings/workspace', {
+    method: 'PATCH',
+    body: JSON.stringify({ workspacePath }),
+  })
+}
+
+export function createCredentialProfile(input: CredentialProfileInput) {
+  return requestJson<CredentialProfile>('/api/settings/credentials', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateCredentialProfile(profileId: string, input: CredentialProfileInput) {
+  return requestJson<CredentialProfile>(`/api/settings/credentials/${profileId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function testCredentialProfile(profileId: string) {
+  return requestJson<CredentialProfileTestResult>(`/api/settings/credentials/${profileId}/test`, {
+    method: 'POST',
+  })
+}
+
+export function deleteCredentialProfile(profileId: string) {
+  return requestJson<{ profileId: string }>(`/api/settings/credentials/${profileId}`, { method: 'DELETE' })
+}
+
+export function importAwsCredentialCsv(input: AwsCredentialCsvImport) {
+  return requestJson<CredentialProfileTestResult>('/api/settings/credentials/import/aws-csv', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function listCloudMachines(profileId?: string) {
+  const query = profileId ? `?profileId=${encodeURIComponent(profileId)}` : ''
+  return requestJson<CloudInventory>(`/api/cloud/machines${query}`)
+}
+
+export function listCloudFirewallRules(machineId: string) {
+  return requestJson<CloudFirewallRule[]>(`/api/cloud/machines/${encodeURIComponent(machineId)}/firewall-rules`)
+}
+
+export function addCloudFirewallRule(machineId: string, input: CloudFirewallRuleInput) {
+  return requestJson<CloudFirewallRule[]>(`/api/cloud/machines/${encodeURIComponent(machineId)}/firewall-rules`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function removeCloudFirewallRule(machineId: string, ruleId: string) {
+  return requestJson<CloudFirewallRule[]>(
+    `/api/cloud/machines/${encodeURIComponent(machineId)}/firewall-rules/${encodeURIComponent(ruleId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function getCloudMachineMetrics(machineId: string, hours = 1) {
+  return requestJson<CloudMachineMetrics>(
+    `/api/cloud/machines/${encodeURIComponent(machineId)}/metrics?hours=${encodeURIComponent(hours)}`,
+  )
+}
+
+export function changeCloudMachinePower(machineId: string, action: CloudMachinePowerAction) {
+  return requestJson<CloudMachine>(`/api/cloud/machines/${encodeURIComponent(machineId)}/power`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  })
+}
+
+export function listApplications() {
+  return requestJson<GroveApplication[]>('/api/applications')
+}
+
+export function createApplication(input: GroveApplicationInput) {
+  return requestJson<GroveApplication>('/api/applications', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateApplication(applicationId: string, input: GroveApplicationInput) {
+  return requestJson<GroveApplication>(`/api/applications/${applicationId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function syncApplicationSource(applicationId: string) {
+  return requestJson<GroveApplication>(`/api/applications/${applicationId}/source/sync`, {
+    method: 'POST',
+  })
+}
+
+export function buildApplication(applicationId: string) {
+  return requestJson<ApplicationVersion>(`/api/applications/${applicationId}/builds`, {
+    method: 'POST',
+  })
+}
+
+export function deployApplication(applicationId: string, input: { versionId: string; vmIds: string[]; environment?: string }) {
+  return requestJson<{ application: GroveApplication; deployment: ApplicationDeployment }>(
+    `/api/applications/${applicationId}/deployments`,
+    { method: 'POST', body: JSON.stringify(input) },
+  )
+}
+
+export function getApplicationLogs(applicationId: string, vmId: string, lines = 200) {
+  return requestJson<{ vmId: string; lines: string[] }>(
+    `/api/applications/${applicationId}/logs?vmId=${encodeURIComponent(vmId)}&lines=${lines}`,
+  )
+}
+
+export function getTerraformStatus() {
+  return requestJson<TerraformRuntimeStatus>('/api/infrastructure/terraform/status')
+}
+
+export function installTerraform() {
+  return requestJson<TerraformRuntimeStatus>('/api/infrastructure/terraform/install', { method: 'POST' })
+}
+
+export function createApplicationEnvironment(applicationId: string, input: ApplicationEnvironmentInput) {
+  return requestJson<ApplicationEnvironment>(`/api/applications/${applicationId}/environments`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function planApplicationEnvironment(applicationId: string, environmentId: string, destroy = false) {
+  return requestJson<{ application: GroveApplication; environment: ApplicationEnvironment; operation: InfrastructureOperation }>(
+    `/api/applications/${applicationId}/environments/${environmentId}/plan`,
+    { method: 'POST', body: JSON.stringify({ destroy }) },
+  )
+}
+
+export function applyApplicationEnvironment(applicationId: string, environmentId: string, planOperationId: string) {
+  return requestJson<{ application: GroveApplication; environment: ApplicationEnvironment; operation: InfrastructureOperation }>(
+    `/api/applications/${applicationId}/environments/${environmentId}/apply`,
+    { method: 'POST', body: JSON.stringify({ planOperationId }) },
+  )
 }
 
 export function rebootVm(vmId: string) {

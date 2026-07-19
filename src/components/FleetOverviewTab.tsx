@@ -3,6 +3,7 @@ import { cx } from '../lib/format'
 import { IconButton } from './IconButton'
 import { MetricTile } from './MetricTile'
 import { StatusPill } from './StatusPill'
+import { CloudMachinesPanel } from './CloudMachinesPanel'
 import type { VM } from '../types'
 
 interface FleetOverviewTabProps {
@@ -192,6 +193,8 @@ export function FleetOverviewTab({ vms, onSelectVm, onCollapse }: FleetOverviewT
               </table>
             </div>
           </section>
+
+          <CloudMachinesPanel />
 
           <section className="rounded border border-slate-200 bg-white">
             <header className="border-b border-slate-200 px-3 py-2">

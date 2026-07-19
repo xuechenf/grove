@@ -1,4 +1,6 @@
 import type {
+  CloudFirewallRuleInput,
+  CloudMachinePowerAction,
   CopilotRuntimeStatus,
   CopilotScope,
   CopilotToolCallKind,
@@ -41,6 +43,28 @@ export interface CopilotToolHost {
     command: string
     reason: string
     targetVmIds?: string[]
+  }): Promise<ToolResult>
+  /** Provider-neutral cloud control. Kimi reaches these only through Grove's scoped MCP endpoint. */
+  inspectCloudMachines(input: { scope: CopilotScope }): Promise<ToolResult>
+  inspectCloudFirewallRules(input: { scope: CopilotScope; machineId: string }): Promise<ToolResult>
+  inspectCloudMetrics(input: { scope: CopilotScope; machineId: string; hours?: number }): Promise<ToolResult>
+  cloudPowerFromCopilot(input: {
+    scope: CopilotScope
+    machineId: string
+    action: CloudMachinePowerAction
+    reason: string
+  }): Promise<ToolResult>
+  addCloudFirewallRuleFromCopilot(input: {
+    scope: CopilotScope
+    machineId: string
+    rule: CloudFirewallRuleInput
+    reason: string
+  }): Promise<ToolResult>
+  removeCloudFirewallRuleFromCopilot(input: {
+    scope: CopilotScope
+    machineId: string
+    ruleId: string
+    reason: string
   }): Promise<ToolResult>
   recordNote(input: { scope: CopilotScope; content: string }): ToolResult
   getHistory(input: { scope: CopilotScope; query?: string; limit?: number }): ToolResult

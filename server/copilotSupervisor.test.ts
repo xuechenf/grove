@@ -37,6 +37,12 @@ const host: CopilotToolHost = {
   inspectVm: async () => ({ ok: true, summary: 'ok' }),
   diagnoseService: async () => ({ ok: true, summary: 'ok' }),
   fleetRunCommand: async () => ({ ok: true, summary: 'ok' }),
+  inspectCloudMachines: async () => ({ ok: true, summary: 'ok' }),
+  inspectCloudFirewallRules: async () => ({ ok: true, summary: 'ok' }),
+  inspectCloudMetrics: async () => ({ ok: true, summary: 'ok' }),
+  cloudPowerFromCopilot: async () => ({ ok: true, summary: 'ok' }),
+  addCloudFirewallRuleFromCopilot: async () => ({ ok: true, summary: 'ok' }),
+  removeCloudFirewallRuleFromCopilot: async () => ({ ok: true, summary: 'ok' }),
   recordNote: () => ({ ok: true, summary: 'ok' }),
   getHistory: () => ({ ok: true, summary: 'ok' }),
 }
@@ -70,6 +76,8 @@ describe('AGENTS.md is a cache-stable prefix', () => {
     expect(after).toBe(before)
     // Stable identifiers stay; volatile status does not.
     expect(before).toContain(vm.id)
+    expect(before).toContain('list_cloud_machines')
+    expect(before).toContain('Never propose creating or terminating cloud')
     expect(before).not.toMatch(/running\/healthy|stopped\/critical/)
   })
 })

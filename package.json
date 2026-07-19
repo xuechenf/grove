@@ -29,6 +29,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.1090.0",
+    "@aws-sdk/client-ec2": "^3.1090.0",
     "@openuidev/react-lang": "^0.2.6",
     "@radix-ui/react-dialog": "^1.1.16",
     "@radix-ui/react-progress": "^1.1.9",

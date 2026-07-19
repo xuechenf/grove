@@ -116,6 +116,344 @@ export interface AppRunnerService {
   lastDeploySummary: string
 }
 
+export type ApplicationSource =
+  | {
+      type: 'local'
+      /** Original folder selected by the user. Grove copies it into the managed workspace. */
+      path: string
+    }
+  | {
+      type: 'git'
+      repoUrl: string
+      ref?: string
+    }
+
+export interface ApplicationConfiguration {
+  installCommand?: string
+  buildCommand?: string
+  /** Build output relative to the frozen source snapshot. Defaults to `dist`. */
+  artifactPath: string
+  startCommand: string
+  port: number
+  healthCheckPath: string
+  healthCheckTimeoutSeconds: number
+  /** Non-secret runtime values. Secret values are referenced through credential profiles. */
+  environment: Record<string, string>
+}
+
+export interface GroveApplicationInput {
+  name: string
+  description?: string
+  source: ApplicationSource
+  configuration: ApplicationConfiguration
+}
+
+export type ApplicationVersionStatus = 'building' | 'succeeded' | 'failed'
+
+export interface ApplicationVersion {
+  id: string
+  label: string
+  sequence: number
+  status: ApplicationVersionStatus
+  createdAt: string
+  completedAt?: string
+  sourceRevision?: string
+  artifactRelativePath?: string
+  artifactDigest?: string
+  artifactSizeBytes?: number
+  buildLogRelativePath: string
+  failure?: string
+}
+
+export type ApplicationInstanceStatus =
+  | 'unknown'
+  | 'uploading'
+  | 'deploying'
+  | 'healthy'
+  | 'degraded'
+  | 'failed'
+  | 'stopped'
+
+export interface ApplicationInstance {
+  vmId: string
+  versionId?: string
+  desiredVersionId?: string
+  status: ApplicationInstanceStatus
+  remotePath: string
+  unitName: string
+  updatedAt: string
+  healthDetail?: string
+  lastDeploymentId?: string
+}
+
+export type ApplicationDeploymentStatus = 'queued' | 'running' | 'succeeded' | 'partial' | 'failed'
+export type ApplicationDeploymentTargetStatus =
+  | 'queued'
+  | 'uploading'
+  | 'activating'
+  | 'healthy'
+  | 'rolled_back'
+  | 'failed'
+
+export interface ApplicationDeploymentTarget {
+  vmId: string
+  status: ApplicationDeploymentTargetStatus
+  startedAt?: string
+  completedAt?: string
+  detail?: string
+  previousVersionId?: string
+}
+
+export interface ApplicationDeployment {
+  id: string
+  applicationId: string
+  versionId: string
+  environment: string
+  strategy: 'rolling'
+  status: ApplicationDeploymentStatus
+  createdAt: string
+  completedAt?: string
+  targetVmIds: string[]
+  targets: ApplicationDeploymentTarget[]
+}
+
+export type InfrastructureProvider = 'aws' | 'azure' | 'alicloud'
+
+export interface InfrastructureIngressRule {
+  description: string
+  protocol: 'tcp' | 'udp'
+  fromPort: number
+  toPort: number
+  cidrs: string[]
+}
+
+export interface ApplicationEnvironmentInput {
+  name: string
+  provider: InfrastructureProvider
+  region: string
+  providerCredentialProfileId: string
+  sshCredentialProfileId: string
+  vmName: string
+  instanceType: string
+  imageId: string
+  systemUser: string
+  diskSizeGb: number
+  assignPublicIp: boolean
+  ingressRules: InfrastructureIngressRule[]
+  /** Optional Name.com profile and hostname are reconciled only after Terraform returns an IP. */
+  nameComCredentialProfileId?: string
+  hostname?: string
+}
+
+export type InfrastructureOperationKind = 'plan' | 'apply' | 'destroy-plan' | 'destroy-apply'
+export type InfrastructureOperationStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+
+export interface TerraformChangeSummary {
+  add: number
+  change: number
+  destroy: number
+}
+
+export interface InfrastructureOperation {
+  id: string
+  kind: InfrastructureOperationKind
+  status: InfrastructureOperationStatus
+  createdAt: string
+  completedAt?: string
+  planDigest?: string
+  planRelativePath?: string
+  logRelativePath: string
+  changes?: TerraformChangeSummary
+  failure?: string
+}
+
+export interface TerraformRuntimeStatus {
+  available: boolean
+  executable?: string
+  version?: string
+  detail: string
+}
+
+export type ApplicationEnvironmentStatus =
+  | 'draft'
+  | 'planned'
+  | 'provisioning'
+  | 'ready'
+  | 'failed'
+  | 'destroy_planned'
+
+export interface ApplicationEnvironment {
+  id: string
+  slug: string
+  name: string
+  provider: InfrastructureProvider
+  region: string
+  providerCredentialProfileId: string
+  sshCredentialProfileId: string
+  vmName: string
+  instanceType: string
+  imageId: string
+  systemUser: string
+  diskSizeGb: number
+  assignPublicIp: boolean
+  ingressRules: InfrastructureIngressRule[]
+  nameComCredentialProfileId?: string
+  hostname?: string
+  dnsStatus: 'not_configured' | 'pending' | 'ready' | 'failed'
+  dnsRecordId?: string
+  dnsDetail?: string
+  status: ApplicationEnvironmentStatus
+  vmIds: string[]
+  publicIp?: string
+  privateIp?: string
+  createdAt: string
+  updatedAt: string
+  operations: InfrastructureOperation[]
+}
+
+export type ApplicationHealth = 'healthy' | 'degraded' | 'failed' | 'unknown' | 'not_deployed'
+
+export interface GroveApplication {
+  id: string
+  slug: string
+  name: string
+  description?: string
+  source: ApplicationSource
+  /** Absolute path to Grove's managed source copy. */
+  managedSourcePath: string
+  configuration: ApplicationConfiguration
+  health: ApplicationHealth
+  activeVersionId?: string
+  createdAt: string
+  updatedAt: string
+  versions: ApplicationVersion[]
+  deployments: ApplicationDeployment[]
+  instances: ApplicationInstance[]
+  environments: ApplicationEnvironment[]
+}
+
+export type CredentialProfileKind = 'ssh' | 'aws' | 'azure' | 'alicloud' | 'name.com'
+
+export interface CredentialProfile {
+  id: string
+  kind: CredentialProfileKind
+  name: string
+  isDefault: boolean
+  secretConfigured: boolean
+  /** Safe-to-render provider metadata only; secret values never appear in snapshots. */
+  configuration: Record<string, string>
+  createdAt: string
+  updatedAt: string
+  lastTestAt?: string
+  lastTestStatus?: 'passed' | 'failed'
+  lastTestDetail?: string
+}
+
+export interface CredentialProfileInput {
+  kind: CredentialProfileKind
+  name: string
+  isDefault?: boolean
+  /** Provider identifiers and paths that are safe to display. */
+  configuration: Record<string, string>
+  /** Write-only values. The backend stores these in the credential vault and never echoes them. */
+  secrets?: Record<string, string>
+}
+
+export interface CredentialProfileTestResult {
+  profile: CredentialProfile
+  status: 'passed' | 'failed'
+  detail: string
+  identity?: Record<string, string>
+}
+
+export interface AwsCredentialCsvImport {
+  name: string
+  region?: string
+  isDefault?: boolean
+  /** Raw CSV contents are write-only and must never be persisted outside the credential vault. */
+  csvText: string
+}
+
+export type CloudMachineState = 'pending' | 'running' | 'stopping' | 'stopped' | 'rebooting' | 'unknown'
+export type CloudMachinePowerAction = 'start' | 'stop' | 'reboot'
+
+export interface CloudFirewallSummary {
+  id: string
+  name: string
+}
+
+/** Provider-neutral existing VM metadata returned by Grove's cloud control plane. */
+export interface CloudMachine {
+  id: string
+  credentialProfileId: string
+  credentialProfileName: string
+  name: string
+  location: string
+  zone?: string
+  state: CloudMachineState
+  publicIp?: string
+  privateIp?: string
+  machineType?: string
+  imageId?: string
+  launchedAt?: string
+  monitoring?: string
+  firewalls: CloudFirewallSummary[]
+}
+
+export interface CloudInventory {
+  machines: CloudMachine[]
+  scannedAt: string
+  warnings: string[]
+}
+
+export interface CloudFirewallRule {
+  id: string
+  firewallId: string
+  firewallName: string
+  direction: 'ingress' | 'egress'
+  protocol: string
+  fromPort?: number
+  toPort?: number
+  source: string
+  description?: string
+}
+
+export interface CloudFirewallRuleInput {
+  firewallId: string
+  protocol: 'tcp' | 'udp'
+  fromPort: number
+  toPort: number
+  cidr: string
+  description?: string
+}
+
+export interface CloudMetricPoint {
+  timestamp: string
+  value: number
+}
+
+export interface CloudMetricSeries {
+  key: 'cpuPercent' | 'networkInBytes' | 'networkOutBytes' | 'statusCheckFailed'
+  label: string
+  unit: string
+  points: CloudMetricPoint[]
+}
+
+export interface CloudMachineMetrics {
+  machineId: string
+  periodSeconds: number
+  startTime: string
+  endTime: string
+  series: CloudMetricSeries[]
+}
+
+export interface GroveSettings {
+  schemaVersion: 2
+  workspacePath: string
+  workspaceStatus: 'healthy' | 'missing' | 'unwritable' | 'migrating'
+  credentialProfiles: CredentialProfile[]
+}
+
 export interface ProcessInfo {
   pid: number
   command: string
@@ -410,6 +748,8 @@ export interface LocalDefaults {
 
 export interface AppSnapshot {
   vms: VM[]
+  applications: GroveApplication[]
+  settings: GroveSettings
   transfers: TransferJob[]
   messages: CopilotMessage[]
   proposals: ActionProposal[]
@@ -430,6 +770,10 @@ export type ServerEvent =
   | { type: 'snapshot'; payload: AppSnapshot }
   | { type: 'vm.updated'; payload: VM }
   | { type: 'vm.deleted'; payload: { vmId: string } }
+  | { type: 'application.updated'; payload: GroveApplication }
+  | { type: 'application.deleted'; payload: { applicationId: string } }
+  | { type: 'deployment.updated'; payload: ApplicationDeployment }
+  | { type: 'settings.updated'; payload: GroveSettings }
   | { type: 'transfer.updated'; payload: TransferJob }
   | { type: 'copilot.message'; payload: CopilotMessage }
   | { type: 'copilot.delta'; payload: CopilotDeltaEvent }

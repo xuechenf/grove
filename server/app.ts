@@ -6,7 +6,11 @@ import { z } from 'zod'
 import type {
   ActionProposal,
   AppRunnerServiceInput,
+  AwsCredentialCsvImport,
+  CloudFirewallRuleInput,
   CopilotScope,
+  CredentialProfileInput,
+  GroveApplicationInput,
   TabId,
   TransferJob,
   VmConnectionInput,
@@ -48,6 +52,74 @@ const appRunnerServiceSchema = z.object({
   buildCommand: z.string().optional(),
   startCommand: z.string().trim().min(1),
 })
+
+const applicationSourceSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('local'), path: z.string().trim().min(1) }),
+  z.object({
+    type: z.literal('git'),
+    repoUrl: z.string().trim().min(1),
+    ref: z.string().trim().min(1).optional(),
+  }),
+])
+
+const applicationConfigurationSchema = z.object({
+  installCommand: z.string().optional(),
+  buildCommand: z.string().optional(),
+  artifactPath: z.string().trim().min(1).default('dist'),
+  startCommand: z.string().trim().min(1),
+  port: z.coerce.number().int().min(1).max(65535),
+  healthCheckPath: z.string().trim().min(1).refine((value) => value.startsWith('/'), {
+    message: 'Health check path must start with /.',
+  }),
+  healthCheckTimeoutSeconds: z.coerce.number().int().min(1).max(600).default(60),
+  environment: z.record(z.string(), z.string()).default({}),
+})
+
+const applicationInputSchema = z.object({
+  name: z.string().trim().min(1),
+  description: z.string().optional(),
+  source: applicationSourceSchema,
+  configuration: applicationConfigurationSchema,
+})
+
+const applicationDeploymentSchema = z.object({
+  versionId: z.string().min(1),
+  vmIds: z.array(z.string().min(1)).min(1),
+  environment: z.string().trim().min(1).default('production'),
+})
+
+const infrastructurePlanSchema = z.object({ destroy: z.boolean().default(false) })
+const infrastructureApplySchema = z.object({ planOperationId: z.string().min(1) })
+
+const workspaceRelocationSchema = z.object({
+  workspacePath: z.string().trim().min(1),
+})
+
+const credentialProfileSchema: z.ZodType<CredentialProfileInput> = z.object({
+  kind: z.enum(['ssh', 'aws', 'azure', 'alicloud', 'name.com']),
+  name: z.string().trim().min(1),
+  isDefault: z.boolean().optional(),
+  configuration: z.record(z.string(), z.string()).default({}),
+  secrets: z.record(z.string(), z.string()).optional(),
+})
+
+const awsCredentialCsvImportSchema: z.ZodType<AwsCredentialCsvImport> = z.object({
+  name: z.string().trim().min(1),
+  region: z.string().trim().min(1).optional(),
+  isDefault: z.boolean().optional(),
+  csvText: z.string().min(1).max(64 * 1024),
+})
+
+const cloudFirewallRuleSchema: z.ZodType<CloudFirewallRuleInput> = z.object({
+  firewallId: z.string().trim().min(1),
+  protocol: z.enum(['tcp', 'udp']),
+  fromPort: z.coerce.number().int().min(0).max(65535),
+  toPort: z.coerce.number().int().min(0).max(65535),
+  cidr: z.string().trim().min(3).max(64),
+  description: z.string().trim().max(255).optional(),
+})
+
+const cloudPowerSchema = z.object({ action: z.enum(['start', 'stop', 'reboot']) })
 
 const scopeSchema = z.custom<CopilotScope>(
   (value) => typeof value === 'string' && (value === 'fleet' || value.startsWith('vm:')),
@@ -180,6 +252,220 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
     asyncRoute(async (_request, response) => {
       await store.refreshAllVmInfoOnce()
       response.json(store.listVms())
+    }),
+  )
+
+  app.get('/api/settings', (_request, response) => {
+    response.json(store.groveSettings())
+  })
+
+  app.patch('/api/settings/workspace', (request, response) => {
+    const body = workspaceRelocationSchema.parse(request.body)
+    response.json(store.relocateWorkspace(body.workspacePath))
+  })
+
+  app.post('/api/settings/credentials', (request, response) => {
+    const body = credentialProfileSchema.parse(request.body)
+    response.status(201).json(store.createCredentialProfile(body))
+  })
+
+  app.post(
+    '/api/settings/credentials/import/aws-csv',
+    asyncRoute(async (request, response) => {
+      const body = awsCredentialCsvImportSchema.parse(request.body)
+      response.status(201).json(await store.importAwsCredentialCsv(body))
+    }),
+  )
+
+  app.patch('/api/settings/credentials/:profileId', (request, response) => {
+    const profileId = requireParam(request.params.profileId, 'profileId')
+    const body = credentialProfileSchema.parse(request.body)
+    response.json(store.updateCredentialProfile(profileId, body))
+  })
+
+  app.post(
+    '/api/settings/credentials/:profileId/test',
+    asyncRoute(async (request, response) => {
+      const profileId = requireParam(request.params.profileId, 'profileId')
+      response.json(await store.testCredentialProfile(profileId))
+    }),
+  )
+
+  app.delete('/api/settings/credentials/:profileId', (request, response) => {
+    const profileId = requireParam(request.params.profileId, 'profileId')
+    store.deleteCredentialProfile(profileId)
+    response.json({ profileId })
+  })
+
+  app.get(
+    '/api/cloud/machines',
+    asyncRoute(async (request, response) => {
+      const profileId = typeof request.query.profileId === 'string' ? request.query.profileId : undefined
+      response.json(await store.listCloudMachines(profileId))
+    }),
+  )
+
+  app.get(
+    '/api/cloud/machines/:machineId/firewall-rules',
+    asyncRoute(async (request, response) => {
+      response.json(await store.listCloudFirewallRules(requireParam(request.params.machineId, 'machineId')))
+    }),
+  )
+
+  app.post(
+    '/api/cloud/machines/:machineId/firewall-rules',
+    asyncRoute(async (request, response) => {
+      const input = cloudFirewallRuleSchema.parse(request.body)
+      response.status(201).json(
+        await store.addCloudFirewallRule(requireParam(request.params.machineId, 'machineId'), input),
+      )
+    }),
+  )
+
+  app.delete(
+    '/api/cloud/machines/:machineId/firewall-rules/:ruleId',
+    asyncRoute(async (request, response) => {
+      response.json(
+        await store.removeCloudFirewallRule(
+          requireParam(request.params.machineId, 'machineId'),
+          requireParam(request.params.ruleId, 'ruleId'),
+        ),
+      )
+    }),
+  )
+
+  app.get(
+    '/api/cloud/machines/:machineId/metrics',
+    asyncRoute(async (request, response) => {
+      const hours = typeof request.query.hours === 'string' ? Number(request.query.hours) : undefined
+      response.json(
+        await store.getCloudMachineMetrics(
+          requireParam(request.params.machineId, 'machineId'),
+          Number.isFinite(hours) ? hours : undefined,
+        ),
+      )
+    }),
+  )
+
+  app.post(
+    '/api/cloud/machines/:machineId/power',
+    asyncRoute(async (request, response) => {
+      const body = cloudPowerSchema.parse(request.body)
+      response.json(await store.cloudMachinePower(requireParam(request.params.machineId, 'machineId'), body.action))
+    }),
+  )
+
+  app.get('/api/applications', (_request, response) => {
+    response.json(store.listApplications())
+  })
+
+  app.get('/api/infrastructure/terraform/status', (_request, response) => {
+    response.json(store.terraformStatus())
+  })
+
+  app.post(
+    '/api/infrastructure/terraform/install',
+    asyncRoute(async (_request, response) => {
+      response.json(await store.installTerraform())
+    }),
+  )
+
+  app.post(
+    '/api/applications',
+    asyncRoute(async (request, response) => {
+      const body = applicationInputSchema.parse(request.body) as GroveApplicationInput
+      response.status(201).json(await store.createApplication(body))
+    }),
+  )
+
+  app.get('/api/applications/:applicationId', (request, response) => {
+    const application = store.getApplication(request.params.applicationId)
+    if (!application) {
+      response.status(404).json({ error: 'Application not found' })
+      return
+    }
+    response.json(application)
+  })
+
+  app.patch('/api/applications/:applicationId', (request, response) => {
+    const body = applicationInputSchema.parse(request.body) as GroveApplicationInput
+    response.json(store.updateApplication(request.params.applicationId, body))
+  })
+
+  app.post(
+    '/api/applications/:applicationId/source/sync',
+    asyncRoute(async (request, response) => {
+      response.json(await store.syncApplicationSource(requireParam(request.params.applicationId, 'applicationId')))
+    }),
+  )
+
+  app.post(
+    '/api/applications/:applicationId/builds',
+    asyncRoute(async (request, response) => {
+      response.status(201).json(await store.buildApplication(requireParam(request.params.applicationId, 'applicationId')))
+    }),
+  )
+
+  app.post(
+    '/api/applications/:applicationId/deployments',
+    asyncRoute(async (request, response) => {
+      const body = applicationDeploymentSchema.parse(request.body)
+      response.status(201).json(
+        await store.deployApplication(
+          requireParam(request.params.applicationId, 'applicationId'),
+          body.versionId,
+          body.vmIds,
+          body.environment,
+        ),
+      )
+    }),
+  )
+
+  app.get(
+    '/api/applications/:applicationId/logs',
+    asyncRoute(async (request, response) => {
+      const vmId = typeof request.query.vmId === 'string' ? request.query.vmId : undefined
+      if (!vmId) {
+        throw new Error('Missing vmId')
+      }
+      const lines = typeof request.query.lines === 'string' ? Number(request.query.lines) : undefined
+      response.json(
+        await store.readApplicationLogs(
+          requireParam(request.params.applicationId, 'applicationId'),
+          vmId,
+          Number.isFinite(lines) ? lines : undefined,
+        ),
+      )
+    }),
+  )
+
+  app.post('/api/applications/:applicationId/environments', (_request, response) => {
+    response.status(403).json({ error: 'Cloud resource creation is disabled. Grove manages existing resources only.' })
+  })
+
+  app.post(
+    '/api/applications/:applicationId/environments/:environmentId/plan',
+    asyncRoute(async (request, response) => {
+      const applicationId = requireParam(request.params.applicationId, 'applicationId')
+      const environmentId = requireParam(request.params.environmentId, 'environmentId')
+      const body = infrastructurePlanSchema.parse(request.body ?? {})
+      if (!body.destroy) {
+        response.status(403).json({ error: 'Cloud resource creation is disabled. Only destroy plans are allowed.' })
+        return
+      }
+      response.status(201).json(await store.planApplicationEnvironment(applicationId, environmentId, body.destroy))
+    }),
+  )
+
+  app.post(
+    '/api/applications/:applicationId/environments/:environmentId/apply',
+    asyncRoute(async (request, response) => {
+      const applicationId = requireParam(request.params.applicationId, 'applicationId')
+      const environmentId = requireParam(request.params.environmentId, 'environmentId')
+      const body = infrastructureApplySchema.parse(request.body)
+      response.status(201).json(
+        await store.applyApplicationEnvironment(applicationId, environmentId, body.planOperationId),
+      )
     }),
   )
 

@@ -7,6 +7,7 @@ import { createGroveApp } from './app'
 import { generateUiToken, persistUiToken } from './apiToken'
 import { envValue, loadLocalEnv } from './env'
 import { GroveStore } from './store'
+import type { CredentialVault } from './credentialVault'
 
 export interface StartGroveServerOptions {
   /** Port to bind. `0` picks a free ephemeral port. Defaults to GROVE_PORT or 8787. */
@@ -15,6 +16,8 @@ export interface StartGroveServerOptions {
   host?: string
   /** Directory of the built Vite UI to serve from the API origin (packaged desktop app). */
   staticDir?: string
+  /** Optional OS-backed secret vault supplied by the Electron host. */
+  credentialVault?: CredentialVault
 }
 
 export interface GroveServerHandle {
@@ -40,7 +43,10 @@ export function startGroveServer(options: StartGroveServerOptions = {}): Promise
   const host = options.host ?? envValue('GROVE_HOST') ?? '127.0.0.1'
   const uiToken = generateUiToken()
   persistUiToken(uiToken)
-  const { app, store } = createGroveApp(new GroveStore(), { uiToken, staticDir: options.staticDir })
+  const { app, store } = createGroveApp(new GroveStore(undefined, { credentialVault: options.credentialVault }), {
+    uiToken,
+    staticDir: options.staticDir,
+  })
   const server = createServer(app)
   const eventsWss = new WebSocketServer({ noServer: true })
   const terminalWss = new WebSocketServer({ noServer: true })
