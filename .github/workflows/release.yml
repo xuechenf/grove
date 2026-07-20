@@ -1,8 +1,8 @@
 name: Release
 
 # Build the desktop app on each platform's own runner (electron-builder can't cross-compile a
-# macOS app from Windows/Linux) and publish the installers to a GitHub Release. Triggered by a
-# version tag, or manually for a dry run.
+# macOS app from Windows/Linux). Each runner uploads its result, then one Linux job publishes the
+# combined set so parallel builders cannot create duplicate GitHub Release records for one tag.
 on:
   push:
     tags:
@@ -10,10 +10,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # electron-builder creates/updates the GitHub Release
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     strategy:
       fail-fast: false
       matrix:
@@ -34,21 +38,47 @@ jobs:
         run: npm run build:app
 
       - name: Build installers
-        # On a version tag, publish straight to the GitHub Release; on a manual run, just build
-        # (artifacts are uploaded below) so dispatches don't create stray draft releases.
-        run: npx --no-install electron-builder --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
+        run: npx --no-install electron-builder --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No Apple certificate yet — skip code signing so macOS builds don't fail.
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Upload installers as workflow artifacts (manual runs)
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Upload installers as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: grove-${{ matrix.os }}
           path: |
             release/*.exe
+            release/*.exe.blockmap
             release/*.dmg
+            release/*.dmg.blockmap
             release/*.zip
-          if-no-files-found: ignore
+            release/*.zip.blockmap
+            release/latest*.yml
+          if-no-files-found: error
+
+  publish:
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: grove-*
+          path: release
+          merge-multiple: true
+
+      - name: Publish one GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Grove $version" \
+            --generate-notes
