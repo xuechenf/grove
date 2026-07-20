@@ -11,6 +11,7 @@ function cloudService(): CloudControlService {
       warnings: [],
       machines: [{
         id: 'cloud-machine-one',
+        provider: 'aws',
         credentialProfileId: 'credential-one',
         credentialProfileName: 'Cloud account',
         name: 'nrt',
@@ -31,6 +32,7 @@ function cloudService(): CloudControlService {
     }),
     power: vi.fn().mockResolvedValue({
       id: 'cloud-machine-one',
+      provider: 'aws',
       credentialProfileId: 'credential-one',
       credentialProfileName: 'Cloud account',
       name: 'nrt',
@@ -63,5 +65,41 @@ describe('provider-neutral cloud API', () => {
     expect(cloud.removeFirewallRule).toHaveBeenCalledOnce()
     expect(cloud.getMetrics).toHaveBeenCalledWith('cloud-machine-one', 2)
     expect(cloud.power).toHaveBeenCalledWith('cloud-machine-one', 'reboot')
+  })
+
+  it('matches an inventory VM by IP and returns provider-backed Overview telemetry', async () => {
+    const originalFixtures = process.env.GROVE_USE_FIXTURES
+    process.env.GROVE_USE_FIXTURES = 'true'
+    try {
+      const cloud = cloudService()
+      const store = new GroveStore(undefined, { cloudControl: cloud })
+      const vm = store.listVms()[0]
+      vi.mocked(cloud.listMachines).mockResolvedValue({
+        scannedAt: '2026-07-20T01:00:00.000Z',
+        warnings: [],
+        machines: [{
+          id: 'cloud-machine-one',
+          provider: 'aws',
+          credentialProfileId: 'credential-one',
+          credentialProfileName: 'AWS account',
+          name: vm.name,
+          location: 'ap-northeast-1',
+          state: 'running',
+          publicIp: vm.connection.host,
+          firewalls: [],
+        }],
+      })
+      const { app } = createGroveApp(store)
+
+      const overview = (await request(app).get(`/api/vms/${vm.id}/overview`).expect(200)).body
+
+      expect(overview.source).toBe('aws')
+      expect(overview.sourceLabel).toBe('AWS EC2 + CloudWatch')
+      expect(overview.cloudMachine.state).toBe('running')
+      expect(cloud.getMetrics).toHaveBeenCalledWith('cloud-machine-one', 1)
+    } finally {
+      if (originalFixtures === undefined) delete process.env.GROVE_USE_FIXTURES
+      else process.env.GROVE_USE_FIXTURES = originalFixtures
+    }
   })
 })

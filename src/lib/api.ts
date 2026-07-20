@@ -1,5 +1,6 @@
 import type {
   ActionProposal,
+  AlicloudCredentialCsvImport,
   AppSnapshot,
   ApplicationEnvironment,
   ApplicationEnvironmentInput,
@@ -35,6 +36,7 @@ import type {
   TabId,
   TransferJob,
   VM,
+  VmOverviewTelemetry,
   VmConnectionInput,
 } from '../types'
 
@@ -153,6 +155,19 @@ export function importAwsCredentialCsv(input: AwsCredentialCsvImport) {
     method: 'POST',
     body: JSON.stringify(input),
   })
+}
+
+export function importAlicloudCredentialCsv(input: AlicloudCredentialCsvImport) {
+  return requestJson<CredentialProfileTestResult>('/api/settings/credentials/import/alicloud-csv', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function getVmOverview(vmId: string, hours = 1) {
+  return requestJson<VmOverviewTelemetry>(
+    `/api/vms/${encodeURIComponent(vmId)}/overview?hours=${encodeURIComponent(hours)}`,
+  )
 }
 
 export function listCloudMachines(profileId?: string) {

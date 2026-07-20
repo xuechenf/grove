@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { initialMessages, initialProposals, initialTransfers, vms as fixtureVms } from '../src/data/fixtures'
 import type {
   ActionProposal,
+  AlicloudCredentialCsvImport,
   ApplicationEnvironmentInput,
   AwsCredentialCsvImport,
   AppRunnerService,
@@ -24,6 +25,7 @@ import type {
   CloudInventory,
   CloudMachine,
   CloudMachinePowerAction,
+  VmOverviewTelemetry,
   CredentialProfileInput,
   GroveApplicationInput,
   InfrastructureProvider,
@@ -764,6 +766,7 @@ export interface GroveStoreOptions {
 function cloudMachineForAgent(machine: CloudMachine) {
   return {
     id: machine.id,
+    provider: machine.provider,
     name: machine.name,
     location: machine.location,
     zone: machine.zone,
@@ -774,6 +777,9 @@ function cloudMachineForAgent(machine: CloudMachine) {
     imageId: machine.imageId,
     launchedAt: machine.launchedAt,
     monitoring: machine.monitoring,
+    vpcId: machine.vpcId,
+    subnetId: machine.subnetId,
+    networkType: machine.networkType,
     firewalls: machine.firewalls,
   }
 }
@@ -793,6 +799,7 @@ export class GroveStore implements CopilotToolHost {
   private readonly credentialManager: CredentialManager
   private readonly infrastructureManager: InfrastructureManager
   private readonly cloudProviderManager: CloudControlService
+  private cloudInventoryCache?: { inventory: CloudInventory; expiresAt: number }
   /**
    * One confirmation card at a time per scope. When the agent issues several gated
    * commands in parallel, their cards surface strictly in arrival order and the next one
@@ -1007,15 +1014,24 @@ export class GroveStore implements CopilotToolHost {
   }
 
   createCredentialProfile(input: CredentialProfileInput) {
+    this.cloudInventoryCache = undefined
     return this.credentialManager.create(input)
   }
 
   async importAwsCredentialCsv(input: AwsCredentialCsvImport) {
     const profile = this.credentialManager.importAwsCsv(input)
+    this.cloudInventoryCache = undefined
+    return this.credentialManager.test(profile.id)
+  }
+
+  async importAlicloudCredentialCsv(input: AlicloudCredentialCsvImport) {
+    const profile = this.credentialManager.importAlicloudCsv(input)
+    this.cloudInventoryCache = undefined
     return this.credentialManager.test(profile.id)
   }
 
   updateCredentialProfile(profileId: string, input: CredentialProfileInput) {
+    this.cloudInventoryCache = undefined
     return this.credentialManager.update(profileId, input)
   }
 
@@ -1024,11 +1040,17 @@ export class GroveStore implements CopilotToolHost {
   }
 
   deleteCredentialProfile(profileId: string) {
+    this.cloudInventoryCache = undefined
     return this.credentialManager.delete(profileId)
   }
 
   async listCloudMachines(profileId?: string) {
-    return this.enrichCloudInventory(await this.cloudProviderManager.listMachines(profileId))
+    if (!profileId && this.cloudInventoryCache && this.cloudInventoryCache.expiresAt > Date.now()) {
+      return structuredClone(this.cloudInventoryCache.inventory)
+    }
+    const inventory = this.enrichCloudInventory(await this.cloudProviderManager.listMachines(profileId))
+    if (!profileId) this.cloudInventoryCache = { inventory, expiresAt: Date.now() + 45_000 }
+    return inventory
   }
 
   listCloudFirewallRules(machineId: string) {
@@ -1047,7 +1069,47 @@ export class GroveStore implements CopilotToolHost {
     return this.cloudProviderManager.getMetrics(machineId, hours)
   }
 
+  async getVmOverview(vmId: string, hours = 1): Promise<VmOverviewTelemetry> {
+    const vm = await this.refreshVmInfo(vmId)
+    const warnings: string[] = []
+    try {
+      const inventory = await this.listCloudMachines()
+      warnings.push(...inventory.warnings)
+      const endpoints = new Set([vm.connection.host, vm.ipAddress].filter(Boolean))
+      const cloudMachine = inventory.machines.find((machine) =>
+        [machine.publicIp, machine.privateIp].some((ip) => ip && endpoints.has(ip)),
+      )
+      if (cloudMachine && (cloudMachine.provider === 'aws' || cloudMachine.provider === 'alicloud')) {
+        let cloudMetrics
+        try {
+          cloudMetrics = await this.getCloudMachineMetrics(cloudMachine.id, hours)
+        } catch (error) {
+          warnings.push(`${cloudMachine.credentialProfileName}: ${error instanceof Error ? error.message : 'metrics failed'}`)
+        }
+        return {
+          vm,
+          source: cloudMachine.provider,
+          sourceLabel: cloudMachine.provider === 'aws' ? 'AWS EC2 + CloudWatch' : 'Alibaba Cloud ECS + CloudMonitor',
+          sampledAt: cloudMetrics?.endTime ?? inventory.scannedAt,
+          cloudMachine,
+          cloudMetrics,
+          warnings,
+        }
+      }
+    } catch (error) {
+      warnings.push(error instanceof Error ? error.message : 'Cloud provider discovery failed.')
+    }
+    return {
+      vm,
+      source: 'host',
+      sourceLabel: 'Host over SSH',
+      sampledAt: vm.metrics.sampledAt,
+      warnings,
+    }
+  }
+
   async cloudMachinePower(machineId: string, action: CloudMachinePowerAction) {
+    this.cloudInventoryCache = undefined
     const machine = await this.mutationLock.run(`cloud:${machineId}`, () => this.cloudProviderManager.power(machineId, action))
     return this.enrichCloudMachine(machine)
   }

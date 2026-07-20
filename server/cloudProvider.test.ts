@@ -38,6 +38,22 @@ describe('AWS credential CSV import', () => {
   })
 })
 
+describe('Alibaba Cloud credential CSV import', () => {
+  it('accepts the Alibaba export headers and stores the secret only in the vault', () => {
+    const { manager, vault } = credentialManager()
+    const profile = manager.importAlicloudCsv({
+      name: 'China account',
+      region: 'cn-beijing',
+      csvText: 'AccessKey ID,AccessKey Secret\nLTAITESTVALUE,alicloud-secret-value\n',
+    })
+
+    expect(profile.kind).toBe('alicloud')
+    expect(profile.configuration).toEqual({ accessKeyId: 'LTAITESTVALUE', region: 'cn-beijing' })
+    expect(JSON.stringify(profile)).not.toContain('alicloud-secret-value')
+    expect(vault.get(profile.id)).toEqual({ accessKeySecret: 'alicloud-secret-value' })
+  })
+})
+
 describe('provider-neutral cloud control', () => {
   it('uses opaque ids and exposes only the allowed existing-resource operations', async () => {
     const { manager } = credentialManager()

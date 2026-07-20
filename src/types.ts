@@ -374,6 +374,14 @@ export interface AwsCredentialCsvImport {
   csvText: string
 }
 
+export interface AlicloudCredentialCsvImport {
+  name: string
+  region?: string
+  isDefault?: boolean
+  /** Raw CSV contents are write-only and must never be persisted outside the credential vault. */
+  csvText: string
+}
+
 export type CloudMachineState = 'pending' | 'running' | 'stopping' | 'stopped' | 'rebooting' | 'unknown'
 export type CloudMachinePowerAction = 'start' | 'stop' | 'reboot'
 
@@ -385,6 +393,7 @@ export interface CloudFirewallSummary {
 /** Provider-neutral existing VM metadata returned by Grove's cloud control plane. */
 export interface CloudMachine {
   id: string
+  provider: 'aws' | 'azure' | 'alicloud'
   credentialProfileId: string
   credentialProfileName: string
   name: string
@@ -397,6 +406,11 @@ export interface CloudMachine {
   imageId?: string
   launchedAt?: string
   monitoring?: string
+  vpcId?: string
+  subnetId?: string
+  networkType?: string
+  maxBandwidthInMbps?: number
+  maxBandwidthOutMbps?: number
   firewalls: CloudFirewallSummary[]
 }
 
@@ -445,6 +459,19 @@ export interface CloudMachineMetrics {
   startTime: string
   endTime: string
   series: CloudMetricSeries[]
+}
+
+export type VmTelemetrySource = 'aws' | 'alicloud' | 'host'
+
+/** One VM Overview response, using provider APIs when Grove can match the VM by IP. */
+export interface VmOverviewTelemetry {
+  vm: VM
+  source: VmTelemetrySource
+  sourceLabel: string
+  sampledAt: string
+  cloudMachine?: CloudMachine
+  cloudMetrics?: CloudMachineMetrics
+  warnings: string[]
 }
 
 export interface GroveSettings {

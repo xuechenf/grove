@@ -1,5 +1,6 @@
 import { accessSync, constants, existsSync } from 'node:fs'
 import type {
+  AlicloudCredentialCsvImport,
   AwsCredentialCsvImport,
   CredentialProfile,
   CredentialProfileInput,
@@ -88,7 +89,7 @@ function parseCsvRows(csvText: string) {
   }
   row.push(value.trim())
   if (row.some(Boolean)) rows.push(row)
-  if (quoted) throw new Error('AWS credential CSV contains an unterminated quoted value.')
+  if (quoted) throw new Error('Credential CSV contains an unterminated quoted value.')
   return rows
 }
 
@@ -112,6 +113,23 @@ function awsCsvValues(csvText: string) {
     throw new Error('AWS credential CSV must include Access key ID and Secret access key columns.')
   }
   return { accessKeyId, secretAccessKey, sessionToken }
+}
+
+function alicloudCsvValues(csvText: string) {
+  const rows = parseCsvRows(csvText)
+  if (rows.length < 2) throw new Error('Alibaba Cloud credential CSV must contain a header and one credential row.')
+  const headers = rows[0].map(normalizedCsvHeader)
+  const values = rows.find((row, index) => index > 0 && row.some(Boolean)) ?? []
+  const valueFor = (...names: string[]) => {
+    const index = headers.findIndex((header) => names.includes(header))
+    return index >= 0 ? values[index]?.trim() : undefined
+  }
+  const accessKeyId = valueFor('accesskeyid')
+  const accessKeySecret = valueFor('accesskeysecret', 'secretaccesskey')
+  if (!accessKeyId || !accessKeySecret) {
+    throw new Error('Alibaba Cloud credential CSV must include AccessKey ID and AccessKey Secret columns.')
+  }
+  return { accessKeyId, accessKeySecret }
 }
 
 export class CredentialManager {
@@ -178,6 +196,21 @@ export class CredentialManager {
         secretAccessKey: values.secretAccessKey,
         ...(values.sessionToken ? { sessionToken: values.sessionToken } : {}),
       },
+    })
+  }
+
+  importAlicloudCsv(input: AlicloudCredentialCsvImport) {
+    if (!input.csvText.trim()) throw new Error('Select a non-empty Alibaba Cloud credential CSV file.')
+    const values = alicloudCsvValues(input.csvText)
+    return this.create({
+      kind: 'alicloud',
+      name: input.name.trim() || 'Alibaba Cloud account',
+      isDefault: input.isDefault ?? true,
+      configuration: {
+        accessKeyId: values.accessKeyId,
+        region: input.region?.trim() || 'cn-beijing',
+      },
+      secrets: { accessKeySecret: values.accessKeySecret },
     })
   }
 

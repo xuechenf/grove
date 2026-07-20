@@ -19,6 +19,7 @@ import type { LucideIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { cx } from '../lib/format'
 import type {
+  AlicloudCredentialCsvImport,
   CopilotProvider,
   CopilotProviderStatus,
   CredentialProfile,
@@ -121,6 +122,7 @@ interface GeneralSettingsPanelProps {
   onTestCredential: (profileId: string) => Promise<string>
   onDeleteCredential: (profileId: string) => Promise<void>
   onImportAwsCredential: (input: AwsCredentialCsvImport) => Promise<string>
+  onImportAlicloudCredential: (input: AlicloudCredentialCsvImport) => Promise<string>
   onSaveProvider: (input: {
     provider: CopilotProvider
     apiKey: string
@@ -145,6 +147,7 @@ export function GeneralSettingsPanel({
   onTestCredential,
   onDeleteCredential,
   onImportAwsCredential,
+  onImportAlicloudCredential,
   onSaveProvider,
 }: GeneralSettingsPanelProps) {
   const [provider, setProvider] = useState<CopilotProvider>(providerStatus.provider)
@@ -164,6 +167,7 @@ export function GeneralSettingsPanel({
   const [credentialMessage, setCredentialMessage] = useState<string>()
   const [credentialImporting, setCredentialImporting] = useState(false)
   const awsCsvInputRef = useRef<HTMLInputElement>(null)
+  const alicloudCsvInputRef = useRef<HTMLInputElement>(null)
 
   function selectProvider(nextProvider: CopilotProvider) {
     const defaults = optionFor(nextProvider)
@@ -317,6 +321,27 @@ export function GeneralSettingsPanel({
     }
   }
 
+  async function importAlicloudCsv(file: File | undefined) {
+    if (!file) return
+    setCredentialImporting(true)
+    setCredentialMessage(undefined)
+    try {
+      if (file.size > 64 * 1024) throw new Error('Alibaba Cloud credential CSV must be smaller than 64 KB.')
+      const detail = await onImportAlicloudCredential({
+        name: file.name.replace(/\.csv$/i, '').replace(/[_-]+/g, ' ').trim() || 'Alibaba Cloud account',
+        region: 'cn-beijing',
+        isDefault: true,
+        csvText: await file.text(),
+      })
+      setCredentialMessage(detail)
+    } catch (error) {
+      setCredentialMessage(error instanceof Error ? error.message : 'Alibaba Cloud credential import failed.')
+    } finally {
+      setCredentialImporting(false)
+      if (alicloudCsvInputRef.current) alicloudCsvInputRef.current.value = ''
+    }
+  }
+
   return (
     <Dialog.Root open={open} onOpenChange={changeOpen} modal={false}>
       <Dialog.Portal>
@@ -333,7 +358,7 @@ export function GeneralSettingsPanel({
 
           <div className="grid gap-4 p-4">
             <section className="grid gap-3">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Folder className="h-4 w-4 text-slate-500" aria-hidden="true" />
                 <h2 className="text-xs font-semibold uppercase text-slate-500">Local workspace</h2>
                 <span className="ml-auto rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium capitalize text-emerald-700">
@@ -346,6 +371,14 @@ export function GeneralSettingsPanel({
                   value={workspacePath}
                   onChange={(event) => setWorkspacePath(event.target.value)}
                   className="h-9 rounded border border-slate-300 bg-white px-3 font-mono text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
+                />
+                <input
+                  ref={alicloudCsvInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  aria-label="Alibaba Cloud credential CSV"
+                  onChange={(event) => void importAlicloudCsv(event.currentTarget.files?.[0])}
                 />
                 <span className="font-normal text-slate-500">Each application and all immutable build versions live below this folder.</span>
               </label>
@@ -383,6 +416,15 @@ export function GeneralSettingsPanel({
                 >
                   {credentialImporting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <FileUp className="h-3.5 w-3.5" />}
                   Import AWS CSV
+                </button>
+                <button
+                  type="button"
+                  disabled={credentialImporting}
+                  onClick={() => alicloudCsvInputRef.current?.click()}
+                  className="inline-flex h-8 items-center gap-1.5 rounded border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {credentialImporting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <FileUp className="h-3.5 w-3.5" />}
+                  Import Alibaba CSV
                 </button>
                 <button
                   type="button"

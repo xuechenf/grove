@@ -1,12 +1,12 @@
 # Grove
 
-Grove is a local-first desktop app for managing Linux machines reachable over SSH. The React/Vite frontend talks to a local Node/TypeScript backend that owns SSH/SFTP, terminal sessions, file transfers, AppRunner deployment metadata, activity logs, and the copilot. The copilot is the center of the app: its brain is **kimi-code CLI** running locally, and it drives VM operations through Grove's scoped MCP tools.
+Grove is a local-first desktop app for managing Linux machines reachable over SSH. The React/Vite frontend talks to a local Node/TypeScript backend that owns SSH/SFTP, terminal sessions, file transfers, AppRunner deployment metadata, activity logs, live provider telemetry, and the copilot. The copilot is the center of the app: its brain is **kimi-code CLI** running locally, and it drives VM operations through Grove's scoped MCP tools.
 
 ## Download
 
 Installers are published on GitHub Releases:
 
-- [Grove v0.1.0](https://github.com/xuechenf/grove/releases/tag/v0.1.0)
+- [Grove v0.2.0](https://github.com/xuechenf/grove/releases/tag/v0.2.0)
 - Windows: setup installer and portable `.exe`
 - macOS: `.dmg` and zipped app bundle
 
@@ -107,7 +107,9 @@ terminal.
 
 ## Settings
 
-Use the bottom-left Grove settings button to configure the copilot provider and switch the app theme between system, light, and dark modes. Provider settings are saved into `.grove/.env.local`; API keys are not committed.
+Use the bottom-left Grove settings button to configure the workspace, credentials, copilot provider, and app theme. AWS and Alibaba Cloud access-key CSV exports can be imported directly; Grove writes only the profile metadata to settings and keeps secret values in its encrypted credential vault.
+
+When a VM's SSH address matches a discovered AWS EC2 or Alibaba Cloud ECS instance, its Overview uses the provider's live machine state and CloudWatch or CloudMonitor CPU/network metrics. Unmatched machines continue to use status and metrics sampled from the host over SSH. Memory, disk, service, process, and uptime details remain host-reported.
 
 ## Scripts
 
@@ -122,6 +124,6 @@ npm run dist:mac # macOS desktop artifacts
 
 ## Security Notes
 
-- `.grove/`, `*.pem`, logs, build output, and dependency folders are ignored by Git.
+- `.grove/`, `*.csv`, `*.pem`, logs, build output, and dependency folders are ignored by Git.
 - Keep real private keys under `.grove/keys/` or outside the repo.
 - Do not commit `.grove/.env.local`, real inventories, logs, downloads, or VM-specific artifacts.

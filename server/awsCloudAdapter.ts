@@ -67,6 +67,9 @@ function toMachine(instance: Instance, region: string): ProviderMachine | undefi
     imageId: instance.ImageId,
     launchedAt: instance.LaunchTime?.toISOString(),
     monitoring: instance.Monitoring?.State,
+    vpcId: instance.VpcId,
+    subnetId: instance.SubnetId,
+    networkType: instance.VpcId ? 'VPC' : 'EC2-Classic',
     firewalls: (instance.SecurityGroups ?? [])
       .filter((group): group is { GroupId: string; GroupName?: string } => Boolean(group.GroupId))
       .map((group) => ({ nativeId: group.GroupId, name: group.GroupName || 'Firewall' })),

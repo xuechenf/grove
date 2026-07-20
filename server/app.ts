@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import type {
   ActionProposal,
+  AlicloudCredentialCsvImport,
   AppRunnerServiceInput,
   AwsCredentialCsvImport,
   CloudFirewallRuleInput,
@@ -104,6 +105,13 @@ const credentialProfileSchema: z.ZodType<CredentialProfileInput> = z.object({
 })
 
 const awsCredentialCsvImportSchema: z.ZodType<AwsCredentialCsvImport> = z.object({
+  name: z.string().trim().min(1),
+  region: z.string().trim().min(1).optional(),
+  isDefault: z.boolean().optional(),
+  csvText: z.string().min(1).max(64 * 1024),
+})
+
+const alicloudCredentialCsvImportSchema: z.ZodType<AlicloudCredentialCsvImport> = z.object({
   name: z.string().trim().min(1),
   region: z.string().trim().min(1).optional(),
   isDefault: z.boolean().optional(),
@@ -277,6 +285,14 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
     }),
   )
 
+  app.post(
+    '/api/settings/credentials/import/alicloud-csv',
+    asyncRoute(async (request, response) => {
+      const body = alicloudCredentialCsvImportSchema.parse(request.body)
+      response.status(201).json(await store.importAlicloudCredentialCsv(body))
+    }),
+  )
+
   app.patch('/api/settings/credentials/:profileId', (request, response) => {
     const profileId = requireParam(request.params.profileId, 'profileId')
     const body = credentialProfileSchema.parse(request.body)
@@ -302,6 +318,17 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
     asyncRoute(async (request, response) => {
       const profileId = typeof request.query.profileId === 'string' ? request.query.profileId : undefined
       response.json(await store.listCloudMachines(profileId))
+    }),
+  )
+
+  app.get(
+    '/api/vms/:vmId/overview',
+    asyncRoute(async (request, response) => {
+      const hours = typeof request.query.hours === 'string' ? Number(request.query.hours) : 1
+      response.json(await store.getVmOverview(
+        requireParam(request.params.vmId, 'vmId'),
+        Number.isFinite(hours) ? hours : 1,
+      ))
     }),
   )
 

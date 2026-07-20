@@ -10,6 +10,7 @@ import type {
   CredentialProfileKind,
 } from '../src/types'
 import type { CredentialManager } from './credentialManager'
+import { AlicloudCloudAdapter } from './alicloudCloudAdapter'
 import { AwsCloudAdapter } from './awsCloudAdapter'
 
 export interface CloudProviderContext {
@@ -29,6 +30,11 @@ export interface ProviderMachine {
   imageId?: string
   launchedAt?: string
   monitoring?: string
+  vpcId?: string
+  subnetId?: string
+  networkType?: string
+  maxBandwidthInMbps?: number
+  maxBandwidthOutMbps?: number
   firewalls: Array<{ nativeId: string; name: string }>
 }
 
@@ -107,7 +113,10 @@ export class CloudProviderManager implements CloudControlService {
 
   constructor(
     credentials: CredentialManager,
-    adapters: Partial<Record<CredentialProfileKind, CloudProviderAdapter>> = { aws: new AwsCloudAdapter() },
+    adapters: Partial<Record<CredentialProfileKind, CloudProviderAdapter>> = {
+      aws: new AwsCloudAdapter(),
+      alicloud: new AlicloudCloudAdapter(),
+    },
   ) {
     this.credentials = credentials
     this.adapters = adapters
@@ -158,6 +167,7 @@ export class CloudProviderManager implements CloudControlService {
           })
           machines.push({
             id,
+            provider: profile.kind as CloudMachine['provider'],
             credentialProfileId: profile.id,
             credentialProfileName: profile.name,
             name: machine.name,
@@ -170,6 +180,11 @@ export class CloudProviderManager implements CloudControlService {
             imageId: machine.imageId,
             launchedAt: machine.launchedAt,
             monitoring: machine.monitoring,
+            vpcId: machine.vpcId,
+            subnetId: machine.subnetId,
+            networkType: machine.networkType,
+            maxBandwidthInMbps: machine.maxBandwidthInMbps,
+            maxBandwidthOutMbps: machine.maxBandwidthOutMbps,
             firewalls,
           })
         }

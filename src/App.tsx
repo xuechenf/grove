@@ -57,6 +57,7 @@ import {
   getTerraformStatus,
   installTerraform,
   installKimiCli,
+  importAlicloudCredentialCsv,
   importAwsCredentialCsv,
   isApiUnavailableError,
   listAppRunnerServices,
@@ -89,6 +90,7 @@ import {
   vms as fixtureVms,
 } from './data/fixtures'
 import type {
+  AlicloudCredentialCsvImport,
   AppRunnerService,
   AppRunnerServiceInput,
   AwsCredentialCsvImport,
@@ -1609,6 +1611,15 @@ function App() {
     return result.detail
   }
 
+  async function importAlicloudCredential(input: AlicloudCredentialCsvImport) {
+    const result = await importAlicloudCredentialCsv(input)
+    setGroveSettings((current) => ({
+      ...current,
+      credentialProfiles: upsertById(current.credentialProfiles, result.profile),
+    }))
+    return result.detail
+  }
+
   async function removeCredential(profileId: string) {
     await deleteCredentialProfile(profileId)
     setGroveSettings((current) => ({
@@ -1915,7 +1926,7 @@ function App() {
             <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as TabId)} className="min-h-0 flex-1">
               <div className="h-full overflow-auto bg-slate-50 p-4">
                 <Tabs.Content value="overview" className="outline-none">
-                  <OverviewTab vm={selectedVm} />
+                  <OverviewTab key={selectedVm.id} vm={selectedVm} />
                 </Tabs.Content>
                 <Tabs.Content value="files" className="space-y-3 outline-none">
                   <FilesTab
@@ -2004,6 +2015,7 @@ function App() {
         onTestCredential={testCredential}
         onDeleteCredential={removeCredential}
         onImportAwsCredential={importAwsCredential}
+        onImportAlicloudCredential={importAlicloudCredential}
         onSaveProvider={saveProvider}
       />
 
