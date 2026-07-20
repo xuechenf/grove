@@ -1,13 +1,14 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import {
+  Activity,
   AlertTriangle,
+  Boxes,
   FileText,
   LayoutDashboard,
   ListChecks,
   PanelRightClose,
   PanelRightOpen,
-  Rocket,
   Settings,
   TerminalSquare,
   X,
@@ -17,7 +18,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityTab } from './components/ActivityTab'
 import { ApplicationEditorDialog } from './components/ApplicationEditorDialog'
 import { ApplicationsWorkspace } from './components/ApplicationsWorkspace'
-import { AppRunnerTab } from './components/AppRunnerTab'
 import { CopilotPanel } from './components/CopilotPanel'
 import { FilesTab } from './components/FilesTab'
 import { FleetOverviewTab } from './components/FleetOverviewTab'
@@ -25,12 +25,14 @@ import { GeneralSettingsPanel, type AppTheme } from './components/GeneralSetting
 import { IconButton } from './components/IconButton'
 import { LifecycleControls } from './components/LifecycleControls'
 import { OverviewTab } from './components/OverviewTab'
+import { MonitoringTab } from './components/MonitoringTab'
 import { SettingsTab } from './components/SettingsTab'
 import { Sidebar, type OperationalSection } from './components/Sidebar'
 import { StatusPill } from './components/StatusPill'
 import { TerminalTab } from './components/TerminalTab'
 import { TransferQueue } from './components/TransferQueue'
 import { VmEditorDialog } from './components/VmEditorDialog'
+import { VmApplicationsTab } from './components/VmApplicationsTab'
 import {
   apiDisabled,
   buildApplication,
@@ -39,13 +41,11 @@ import {
   createApplication,
   createApplicationEnvironment,
   createCredentialProfile,
-  createAppRunnerService as createAppRunnerProfile,
   createEventsSocket,
   type EventsSocketHandle,
   createTransfer as createTransferJob,
   createVm as createVmProfile,
   decideCopilotProposal,
-  deleteAppRunnerService as deleteAppRunnerProfile,
   deleteCredentialProfile,
   deleteVm,
   deployApplication,
@@ -55,12 +55,12 @@ import {
   getLocalDefaults,
   getSnapshot,
   getTerraformStatus,
+  getVmOverview,
   installTerraform,
   installKimiCli,
   importAlicloudCredentialCsv,
   importAwsCredentialCsv,
   isApiUnavailableError,
-  listAppRunnerServices,
   listApplications,
   listLocalFiles,
   listRemoteFiles,
@@ -74,7 +74,6 @@ import {
   setApiToken,
   syncApplicationSource,
   testCredentialProfile,
-  updateAppRunnerService as updateAppRunnerProfile,
   updateApplication,
   updateCredentialProfile,
   updateVm as updateVmProfile,
@@ -91,8 +90,6 @@ import {
 } from './data/fixtures'
 import type {
   AlicloudCredentialCsvImport,
-  AppRunnerService,
-  AppRunnerServiceInput,
   AwsCredentialCsvImport,
   ApplicationEnvironmentInput,
   GroveApplication,
@@ -118,20 +115,23 @@ import type {
   VM,
   VMAction,
   VmConnectionInput,
+  VmOverviewTelemetry,
 } from './types'
 import { scopeVmId, vmScope } from './types'
+import { hostTelemetry } from './lib/vmTelemetry'
 
 const tabs: Array<{ value: TabId; label: string; icon: ReactNode }> = [
   { value: 'overview', label: 'Overview', icon: <LayoutDashboard className="h-4 w-4" aria-hidden="true" /> },
+  { value: 'monitoring', label: 'Monitoring', icon: <Activity className="h-4 w-4" aria-hidden="true" /> },
+  { value: 'applications', label: 'Applications', icon: <Boxes className="h-4 w-4" aria-hidden="true" /> },
   { value: 'files', label: 'Files', icon: <FileText className="h-4 w-4" aria-hidden="true" /> },
   { value: 'terminal', label: 'Terminal', icon: <TerminalSquare className="h-4 w-4" aria-hidden="true" /> },
-  { value: 'apprunner', label: 'AppRunner', icon: <Rocket className="h-4 w-4" aria-hidden="true" /> },
   { value: 'activity', label: 'Activity', icon: <ListChecks className="h-4 w-4" aria-hidden="true" /> },
   { value: 'settings', label: 'Settings', icon: <Settings className="h-4 w-4" aria-hidden="true" /> },
 ]
 
 const visibleVmActions = vmActions.filter(
-  (action) => !['start', 'stop', 'suspend', 'snapshot', 'clone'].includes(action.id),
+  (action) => action.id === 'reboot',
 )
 
 const DEFAULT_INFO_PANEL_PERCENT = 50
@@ -266,12 +266,6 @@ function appendOrReplaceById<T extends { id: string }>(items: T[], nextItem: T) 
     : [...items, nextItem]
 }
 
-function upsertAppService(items: AppRunnerService[], nextItem: AppRunnerService) {
-  return items.some((item) => item.name === nextItem.name)
-    ? items.map((item) => (item.name === nextItem.name ? nextItem : item))
-    : [nextItem, ...items]
-}
-
 function isCopilotRunStart(event: CopilotProgressEvent) {
   return event.title === 'Queued copilot request' || event.title === 'Sending request to copilot'
 }
@@ -364,33 +358,6 @@ function localVmFromInput(input: VmConnectionInput, currentVms: VM[], existing?:
   }
 }
 
-function localAppRunnerService(vm: VM, input: AppRunnerServiceInput, existing?: AppRunnerService): AppRunnerService {
-  const timestamp = new Date().toISOString()
-  const remotePath = `~/services/${input.name}`
-  return {
-    id: existing?.id ?? `apprunner-${vm.id}-${input.name}`,
-    vmId: vm.id,
-    name: input.name,
-    source: input.source,
-    port: input.port,
-    remotePath,
-    unitName: `grove-apprunner-${input.name}.service`,
-    accessUrl: `http://${vm.connection.host}:${input.port}/`,
-    state: 'running',
-    pid: existing?.pid ?? Math.floor(4000 + Math.random() * 4000),
-    cpuPercent: existing?.cpuPercent ?? 1.5,
-    memoryMb: existing?.memoryMb ?? 96,
-    listening: true,
-    installCommand: input.installCommand,
-    buildCommand: input.buildCommand,
-    startCommand: input.startCommand,
-    createdAt: existing?.createdAt ?? timestamp,
-    updatedAt: timestamp,
-    lastDeployStatus: 'completed',
-    lastDeploySummary: `Service enabled and listening on port ${input.port}.`,
-  }
-}
-
 function applyLifecycle(vm: VM, action: VMAction): VM {
   if (action.id === 'start') {
     return {
@@ -425,6 +392,8 @@ function App() {
   const [selectedApplicationId, setSelectedApplicationId] = useState<string>()
   const [selectedVmId, setSelectedVmId] = useState<string | undefined>(fixtureVms[0]?.id)
   const [activeTab, setActiveTab] = useState<TabId>('overview')
+  const [vmTelemetryById, setVmTelemetryById] = useState<Record<string, VmOverviewTelemetry>>({})
+  const [vmTelemetryLoadingById, setVmTelemetryLoadingById] = useState<Record<string, boolean>>({})
   const [selectedLocalId, setSelectedLocalId] = useState<string | undefined>(localFiles[1]?.id)
   const [localDefaults, setLocalDefaults] = useState<LocalDefaults>(fallbackLocalDefaults)
   const [localPath, setLocalPath] = useState(fallbackLocalDefaults.workspacePath)
@@ -736,6 +705,29 @@ function App() {
     () => applications.find((application) => application.id === selectedApplicationId),
     [applications, selectedApplicationId],
   )
+  const selectedVmTelemetry = selectedVm ? vmTelemetryById[selectedVm.id] ?? hostTelemetry(selectedVm) : undefined
+
+  const refreshVmTelemetry = useCallback(async (vmId: string) => {
+    if (apiDisabled()) return
+    setVmTelemetryLoadingById((current) => ({ ...current, [vmId]: true }))
+    try {
+      const telemetry = await getVmOverview(vmId, 1)
+      setVmTelemetryById((current) => ({ ...current, [vmId]: telemetry }))
+      setVms((current) => upsertById(current, telemetry.vm))
+    } catch (cause) {
+      setVmTelemetryById((current) => {
+        const existing = current[vmId]
+        if (!existing) return current
+        return { ...current, [vmId]: { ...existing, warnings: [cause instanceof Error ? cause.message : 'VM telemetry refresh failed.'] } }
+      })
+    } finally {
+      setVmTelemetryLoadingById((current) => ({ ...current, [vmId]: false }))
+    }
+  }, [])
+
+  useEffect(() => {
+    if (selectedVmId) void refreshVmTelemetry(selectedVmId)
+  }, [refreshVmTelemetry, selectedVmId])
 
   const scopeMessages = useMemo(
     () => messages.filter((message) => (message.scope ?? 'fleet') === copilotScope),
@@ -777,7 +769,7 @@ function App() {
       setSelectedVmId(vmId)
     }
   }
-  const currentRemotePath = selectedVm ? remotePathByVm[selectedVm.id] ?? '/root' : '/'
+  const currentRemotePath = selectedVm ? remotePathByVm[selectedVm.id] ?? '~/grove' : '~/'
   const remoteFiles = selectedVm ? remoteFilesByVmState[selectedVm.id] ?? [] : []
   const selectedRemoteId = selectedVm ? selectedRemoteByVm[selectedVm.id] : undefined
   const remoteLoading = selectedVm ? remoteLoadingByVm[selectedVm.id] ?? false : false
@@ -872,31 +864,6 @@ function App() {
       cancelled = true
     }
   }, [])
-
-  useEffect(() => {
-    if (activeTab !== 'apprunner' || !selectedVmId || apiDisabled()) {
-      return undefined
-    }
-
-    let cancelled = false
-    const vmId = selectedVmId
-
-    listAppRunnerServices(vmId)
-      .then((appServices) => {
-        if (!cancelled) {
-          setVms((current) =>
-            current.map((vm) => (vm.id === vmId ? { ...vm, appServices } : vm)),
-          )
-        }
-      })
-      .catch(() => {
-        // Keep snapshot data if the backend is unavailable while switching tabs.
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [activeTab, selectedVmId])
 
   useEffect(() => {
     if (apiDisabled()) {
@@ -1265,130 +1232,6 @@ function App() {
 
   function refreshRemoteFiles() {
     setRemoteRefreshTick((current) => current + 1)
-  }
-
-  async function createAppService(input: AppRunnerServiceInput) {
-    if (!selectedVm) {
-      return
-    }
-
-    if (!apiDisabled()) {
-      try {
-        const service = await createAppRunnerProfile(selectedVm.id, input)
-        setVms((current) =>
-          current.map((vm) =>
-            vm.id === selectedVm.id ? { ...vm, appServices: upsertAppService(vm.appServices, service) } : vm,
-          ),
-        )
-        return
-      } catch (error) {
-        if (!isApiUnavailableError(error)) {
-          throw error
-        }
-      }
-    }
-
-    const duplicateName = selectedVm.appServices.some((service) => service.name === input.name)
-    if (duplicateName) {
-      throw new Error(`AppRunner service ${input.name} already exists on ${selectedVm.name}.`)
-    }
-    const duplicatePort = selectedVm.appServices.find((service) => service.port === input.port)
-    if (duplicatePort) {
-      throw new Error(`Port ${input.port} is already assigned to ${duplicatePort.name}.`)
-    }
-
-    const service = localAppRunnerService(selectedVm, input)
-    setVms((current) =>
-      current.map((vm) =>
-        vm.id === selectedVm.id
-          ? {
-              ...vm,
-              appServices: upsertAppService(vm.appServices, service),
-              activity: [makeActivity('AppRunner service created', `${service.name} listening on port ${service.port}.`, 'success'), ...vm.activity],
-            }
-          : vm,
-      ),
-    )
-  }
-
-  async function updateAppService(serviceName: string, input: AppRunnerServiceInput) {
-    if (!selectedVm) {
-      return
-    }
-
-    if (!apiDisabled()) {
-      try {
-        const service = await updateAppRunnerProfile(selectedVm.id, serviceName, input)
-        setVms((current) =>
-          current.map((vm) =>
-            vm.id === selectedVm.id ? { ...vm, appServices: upsertAppService(vm.appServices, service) } : vm,
-          ),
-        )
-        return
-      } catch (error) {
-        if (!isApiUnavailableError(error)) {
-          throw error
-        }
-      }
-    }
-
-    const existing = selectedVm.appServices.find((service) => service.name === serviceName)
-    if (!existing) {
-      throw new Error('AppRunner service not found.')
-    }
-    const duplicatePort = selectedVm.appServices.find((service) => service.name !== serviceName && service.port === input.port)
-    if (duplicatePort) {
-      throw new Error(`Port ${input.port} is already assigned to ${duplicatePort.name}.`)
-    }
-
-    const service = localAppRunnerService(selectedVm, input, existing)
-    setVms((current) =>
-      current.map((vm) =>
-        vm.id === selectedVm.id
-          ? {
-              ...vm,
-              appServices: upsertAppService(vm.appServices, service),
-              activity: [makeActivity('AppRunner service updated', `${service.name} restarted on port ${service.port}.`, 'success'), ...vm.activity],
-            }
-          : vm,
-      ),
-    )
-  }
-
-  async function removeAppService(serviceName: string) {
-    if (!selectedVm) {
-      return
-    }
-
-    if (!apiDisabled()) {
-      try {
-        await deleteAppRunnerProfile(selectedVm.id, serviceName)
-        setVms((current) =>
-          current.map((vm) =>
-            vm.id === selectedVm.id
-              ? { ...vm, appServices: vm.appServices.filter((service) => service.name !== serviceName) }
-              : vm,
-          ),
-        )
-        return
-      } catch (error) {
-        if (!isApiUnavailableError(error)) {
-          throw error
-        }
-      }
-    }
-
-    setVms((current) =>
-      current.map((vm) =>
-        vm.id === selectedVm.id
-          ? {
-              ...vm,
-              appServices: vm.appServices.filter((service) => service.name !== serviceName),
-              activity: [makeActivity('AppRunner service removed', `${serviceName} and ~/services/${serviceName} purged.`, 'success'), ...vm.activity],
-            }
-          : vm,
-      ),
-    )
   }
 
   async function testConnection() {
@@ -1913,9 +1756,8 @@ function App() {
                     <Tabs.Trigger
                       key={tab.value}
                       value={tab.value}
-                      className="inline-flex h-9 shrink-0 items-center gap-2 border-b-2 border-transparent px-2 text-sm font-medium text-slate-500 transition hover:text-slate-900 data-[state=active]:border-slate-950 data-[state=active]:text-slate-950"
+                      className="inline-flex h-9 shrink-0 items-center border-b-2 border-transparent px-1.5 text-xs font-medium text-slate-500 transition hover:text-slate-900 data-[state=active]:border-slate-950 data-[state=active]:text-slate-950"
                     >
-                      {tab.icon}
                       {tab.label}
                     </Tabs.Trigger>
                   ))}
@@ -1926,7 +1768,31 @@ function App() {
             <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as TabId)} className="min-h-0 flex-1">
               <div className="h-full overflow-auto bg-slate-50 p-4">
                 <Tabs.Content value="overview" className="outline-none">
-                  <OverviewTab key={selectedVm.id} vm={selectedVm} />
+                  <OverviewTab
+                    vm={selectedVm}
+                    telemetry={selectedVmTelemetry ?? hostTelemetry(selectedVm)}
+                    applications={applications}
+                    loading={vmTelemetryLoadingById[selectedVm.id]}
+                    onRefresh={() => void refreshVmTelemetry(selectedVm.id)}
+                  />
+                </Tabs.Content>
+                <Tabs.Content value="monitoring" className="outline-none">
+                  <MonitoringTab
+                    vm={selectedVm}
+                    telemetry={selectedVmTelemetry ?? hostTelemetry(selectedVm)}
+                    loading={vmTelemetryLoadingById[selectedVm.id]}
+                    onRefresh={() => void refreshVmTelemetry(selectedVm.id)}
+                  />
+                </Tabs.Content>
+                <Tabs.Content value="applications" className="outline-none">
+                  <VmApplicationsTab
+                    vm={selectedVm}
+                    applications={applications}
+                    onOpenApplication={(applicationId) => {
+                      setSelectedApplicationId(applicationId)
+                      setActiveSection('applications')
+                    }}
+                  />
                 </Tabs.Content>
                 <Tabs.Content value="files" className="space-y-3 outline-none">
                   <FilesTab
@@ -1956,6 +1822,16 @@ function App() {
                     onUpload={uploadSelected}
                     onDownload={downloadSelected}
                     onCopyRemotePath={copyRemotePath}
+                    workspaceShortcuts={applications.flatMap((application) => {
+                      const instance = application.instances.find((candidate) => candidate.vmId === selectedVm.id)
+                      return instance ? [{ id: application.id, label: application.name, localPath: application.managedSourcePath, remotePath: instance.remotePath }] : []
+                    })}
+                    onOpenWorkspace={(shortcut) => {
+                      setLocalPath(shortcut.localPath)
+                      setSelectedLocalId(undefined)
+                      setRemotePathByVm((current) => ({ ...current, [selectedVm.id]: shortcut.remotePath }))
+                      setSelectedRemoteByVm((current) => ({ ...current, [selectedVm.id]: undefined }))
+                    }}
                   />
                   <TransferQueue transfers={transfers} vms={vms} />
                 </Tabs.Content>
@@ -1968,23 +1844,26 @@ function App() {
                     }
                   />
                 </Tabs.Content>
-                <Tabs.Content value="apprunner" className="outline-none">
-                  <AppRunnerTab
-                    vm={selectedVm}
-                    defaultLocalPath={localDefaults.workspacePath}
-                    onCreateService={createAppService}
-                    onUpdateService={updateAppService}
-                    onRemoveService={removeAppService}
-                  />
-                </Tabs.Content>
                 <Tabs.Content value="activity" className="outline-none">
                   <ActivityTab vm={selectedVm} transfers={transfers} />
                 </Tabs.Content>
                 <Tabs.Content value="settings" className="outline-none">
                   <SettingsTab
                     vm={selectedVm}
+                    telemetry={selectedVmTelemetry ?? hostTelemetry(selectedVm)}
+                    applications={applications}
+                    loading={vmTelemetryLoadingById[selectedVm.id]}
+                    onRefreshCloud={() => void refreshVmTelemetry(selectedVm.id)}
                     onTestConnection={testConnection}
                     onEditVm={() => setVmEditorMode('edit')}
+                    onOpenInfrastructure={(applicationId) => {
+                      setSelectedApplicationId(applicationId)
+                      setActiveSection('applications')
+                    }}
+                    onRemoveVm={() => {
+                      const deleteAction = vmActions.find((action) => action.id === 'delete')
+                      if (deleteAction) handleLifecycle(deleteAction)
+                    }}
                   />
                 </Tabs.Content>
               </div>

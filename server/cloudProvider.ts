@@ -167,6 +167,7 @@ export class CloudProviderManager implements CloudControlService {
           })
           machines.push({
             id,
+            nativeId: machine.nativeId,
             provider: profile.kind as CloudMachine['provider'],
             credentialProfileId: profile.id,
             credentialProfileName: profile.name,

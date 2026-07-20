@@ -74,6 +74,7 @@ export function startGroveServer(options: StartGroveServerOptions = {}): Promise
       socket.close(1008, 'Missing VM id')
       return
     }
+    const vmName = store.getVm(vmId)?.name ?? vmId
 
     try {
       const { session, stream } = await store.openTerminalShell(vmId, { cols, rows })
@@ -83,7 +84,7 @@ export function startGroveServer(options: StartGroveServerOptions = {}): Promise
         payload: {
           sessionId: session.id,
           vmId,
-          data: `\r\n\x1b[36mGrove attached interactive SSH PTY for ${vmId}. Copilot actions run on separate exec channels.\x1b[0m\r\n`,
+          data: `\r\n\x1b[36mGrove attached interactive SSH PTY for ${vmName}. Copilot actions run on separate exec channels.\x1b[0m\r\n`,
         },
       })
 

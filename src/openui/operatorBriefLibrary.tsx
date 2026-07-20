@@ -7,7 +7,7 @@ import type { AppRunnerServiceState, LifecycleState, VMHealth } from '../types'
 const toneSchema = z.enum(['neutral', 'info', 'success', 'warning', 'critical'])
 const healthSchema = z.enum(['healthy', 'warning', 'critical', 'offline'])
 const lifecycleSchema = z.enum(['running', 'stopped', 'suspended', 'provisioning'])
-const tabSchema = z.enum(['overview', 'files', 'terminal', 'apprunner', 'activity', 'settings'])
+const tabSchema = z.enum(['overview', 'monitoring', 'applications', 'files', 'terminal', 'activity', 'settings'])
 const serviceStateSchema = z.enum(['running', 'degraded', 'stopped'])
 const appRunnerStateSchema = z.enum(['running', 'degraded', 'stopped', 'unknown'])
 const actionKindSchema = z.enum(['focus_vm', 'open_tab', 'ask_followup', 'request_fix'])
@@ -315,7 +315,7 @@ function AppRunnerTableView({ rows }: { rows?: AppRunnerRow[] }) {
   return (
     <section className="overflow-hidden rounded border border-slate-200 bg-white" data-testid="openui-apprunner-table">
       <header className="border-b border-slate-100 px-3 py-2 text-xs font-semibold uppercase text-slate-500">
-        AppRunner
+        Applications
       </header>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[500px] text-left text-xs">
@@ -468,7 +468,14 @@ const ProcessList = defineComponent({
 
 const AppRunnerTable = defineComponent({
   name: 'AppRunnerTable',
-  description: 'AppRunner service health and last deployment status.',
+  description: 'Legacy alias for application runtime health and last deployment status.',
+  props: z.object({ services: z.array(appRunnerSchema) }),
+  component: ({ props }) => <AppRunnerTableView rows={props.services} />,
+})
+
+const ApplicationsTable = defineComponent({
+  name: 'ApplicationsTable',
+  description: 'Application runtime health and last deployment status on the selected VM.',
   props: z.object({ services: z.array(appRunnerSchema) }),
   component: ({ props }) => <AppRunnerTableView rows={props.services} />,
 })
@@ -482,5 +489,5 @@ const ActionBar = defineComponent({
 
 export const operatorBriefLibrary = createLibrary({
   root: 'OperatorBrief',
-  components: [OperatorBrief, MetricGrid, VmHealthTable, AlertList, ServiceTable, ProcessList, AppRunnerTable, ActionBar],
+  components: [OperatorBrief, MetricGrid, VmHealthTable, AlertList, ServiceTable, ProcessList, ApplicationsTable, AppRunnerTable, ActionBar],
 })

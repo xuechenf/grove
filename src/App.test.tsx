@@ -35,6 +35,7 @@ describe('Grove VM console', () => {
     await user.click(screen.getByRole('button', { name: /cedar-db-02/i }))
 
     expect(screen.getByRole('heading', { name: 'cedar-db-02' })).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: /Monitoring/i }))
     expect(screen.getByText('postgresql')).toBeInTheDocument()
   })
 
@@ -62,32 +63,16 @@ describe('Grove VM console', () => {
     expect(screen.queryByText('Transfer queue')).not.toBeInTheDocument()
   })
 
-  it('creates and removes AppRunner services in local mode', async () => {
+  it('uses the VM Applications projection instead of the legacy AppRunner workflow', async () => {
     const { user } = setup()
     await openOrchid(user)
 
-    await user.click(screen.getByRole('tab', { name: /AppRunner/i }))
+    await user.click(screen.getByRole('tab', { name: /^Applications$/i }))
 
-    expect(screen.getByTestId('apprunner-tab')).toBeInTheDocument()
-    expect(screen.getByText('preview-api')).toBeInTheDocument()
-    expect(screen.getByText('~/services/preview-api')).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Create service' }))
-
-    const dialog = screen.getByRole('dialog', { name: 'Create service' })
-    await user.type(within(dialog).getByLabelText(/Service name/i), 'local-api')
-    await user.clear(within(dialog).getByLabelText(/Port/i))
-    await user.type(within(dialog).getByLabelText(/Port/i), '3099')
-    await user.click(within(dialog).getByRole('button', { name: 'Create service' }))
-
-    expect(screen.getByText('local-api')).toBeInTheDocument()
-    expect(screen.getByText('~/services/local-api')).toBeInTheDocument()
-    expect(screen.getByText('3099')).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Remove local-api' }))
-    await user.click(screen.getByRole('button', { name: 'Remove service' }))
-
-    expect(screen.queryByText('local-api')).not.toBeInTheDocument()
+    expect(screen.getByTestId('vm-applications-tab')).toBeInTheDocument()
+    expect(screen.getByText('No applications deployed')).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: /AppRunner/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Create service' })).not.toBeInTheDocument()
   })
 
   it('confirms a lifecycle action and records activity', async () => {
@@ -172,7 +157,7 @@ describe('Grove VM console', () => {
     await user.click(within(editDialog).getByRole('button', { name: 'Save VM' }))
 
     expect(screen.getByText('2200')).toBeInTheDocument()
-    expect(screen.getByText('keys/edge-updated.pem')).toBeInTheDocument()
+    expect(screen.getByText('edge-updated.pem')).toBeInTheDocument()
   })
 
   it('opens grove settings for copilot provider and theme', async () => {
@@ -588,7 +573,7 @@ describe('Grove VM console', () => {
             openUi: {
               type: 'openui',
               content:
-                'root = OperatorBrief("Actions", null, null, null, null, null, null, null, null, null, [{ kind: "focus_vm", label: "Open orchid", vmId: "vm-orchid" }, { kind: "open_tab", label: "Open AppRunner", vmId: "vm-orchid", tab: "apprunner" }, { kind: "ask_followup", label: "Inspect logs", message: "Inspect nginx logs" }, { kind: "request_fix", label: "Fix disk", vmId: "vm-orchid", message: "Disk usage is high" }])',
+                'root = OperatorBrief("Actions", null, null, null, null, null, null, null, null, null, [{ kind: "focus_vm", label: "Open orchid", vmId: "vm-orchid" }, { kind: "open_tab", label: "Open Applications", vmId: "vm-orchid", tab: "applications" }, { kind: "ask_followup", label: "Inspect logs", message: "Inspect nginx logs" }, { kind: "request_fix", label: "Fix disk", vmId: "vm-orchid", message: "Disk usage is high" }])',
             },
             timestamp: '00:01',
             scope: 'fleet',
@@ -608,13 +593,13 @@ describe('Grove VM console', () => {
     )
 
     await user.click(await screen.findByRole('button', { name: 'Open orchid' }))
-    await user.click(screen.getByRole('button', { name: 'Open AppRunner' }))
+    await user.click(screen.getByRole('button', { name: 'Open Applications' }))
     await user.click(screen.getByRole('button', { name: 'Inspect logs' }))
     await user.click(screen.getByRole('button', { name: 'Fix disk' }))
 
     await waitFor(() => {
       expect(onOpenWorkspaceTarget).toHaveBeenNthCalledWith(1, { vmId: 'vm-orchid' })
-      expect(onOpenWorkspaceTarget).toHaveBeenNthCalledWith(2, { vmId: 'vm-orchid', tab: 'apprunner' })
+      expect(onOpenWorkspaceTarget).toHaveBeenNthCalledWith(2, { vmId: 'vm-orchid', tab: 'applications' })
       expect(onSendMessage).toHaveBeenNthCalledWith(1, 'Inspect nginx logs')
       expect(onSendMessage).toHaveBeenNthCalledWith(
         2,

@@ -3,7 +3,7 @@ export const OPENUI_OPERATOR_BRIEF_PROMPT = `
 
 You may render ONE generated operator brief by adding a single fenced \`openui\` block after a
 concise markdown summary. Use it only for status dashboards, operator briefs, comparisons,
-diagnosis summaries, and AppRunner health reviews. Normal explanations stay markdown-only
+diagnosis summaries, and application health reviews. Normal explanations stay markdown-only
 unless a generated UI makes the operational state easier to scan.
 
 ### Syntax — openui-lang, NOT JSX (this is mandatory)
@@ -26,7 +26,7 @@ discarded. Follow these rules exactly:
 - AlertList(alerts)
 - ServiceTable(services)
 - ProcessList(processes)
-- AppRunnerTable(services)
+- ApplicationsTable(services)
 - ActionBar(actions)
 
 Argument shapes:

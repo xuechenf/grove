@@ -1,16 +1,18 @@
 # Grove
 
-Grove is a local-first desktop app for managing Linux machines reachable over SSH. The React/Vite frontend talks to a local Node/TypeScript backend that owns SSH/SFTP, terminal sessions, file transfers, AppRunner deployment metadata, activity logs, live provider telemetry, and the copilot. The copilot is the center of the app: its brain is **kimi-code CLI** running locally, and it drives VM operations through Grove's scoped MCP tools.
+Grove is a local-first desktop app for managing Linux machines reachable over SSH. The React/Vite frontend talks to a local Node/TypeScript backend that owns SSH/SFTP, terminal sessions, file transfers, immutable application builds and deployments, activity logs, live provider telemetry, cloud security-group controls, and the copilot. The copilot is the center of the app: its brain is **kimi-code CLI** running locally, and it drives VM operations through Grove's scoped MCP tools.
 
 ## Download
 
 Installers are published on GitHub Releases:
 
-- [Grove v0.2.0](https://github.com/xuechenf/grove/releases/tag/v0.2.0)
+- [Grove v0.3.0](https://github.com/xuechenf/grove/releases/tag/v0.3.0)
 - Windows: setup installer and portable `.exe`
 - macOS: `.dmg` and zipped app bundle
 
 The desktop app runs the backend locally and serves the UI from the packaged app. macOS builds are currently unsigned.
+
+Version 0.3.0 gives every VM a consistent Overview, Monitoring, Applications, Files, Terminal, Activity, and Settings workspace. AWS and Alibaba Cloud machines use live provider telemetry and security-group APIs; other machines fall back cleanly to SSH host monitoring.
 
 ## Requirements
 
@@ -52,7 +54,7 @@ Runtime state lives in an ignored `.grove/` folder inside the project:
 .grove/
   .env.local
   inventory.yaml
-  apprunner.yaml
+  apprunner.yaml  # legacy v0.1 metadata, imported into Applications
   keys/
   downloads/
   local-files/

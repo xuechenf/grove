@@ -323,6 +323,13 @@ function expandPath(path: string) {
   return resolveProjectStateReference(path)
 }
 
+function expandRemotePath(vm: VM, path: string) {
+  const remoteHome = vm.connection.user === 'root' ? '/root' : `/home/${vm.connection.user}`
+  if (path === '~') return remoteHome
+  if (path.startsWith('~/')) return `${remoteHome}/${path.slice(2)}`
+  return path
+}
+
 function fileTypeFromMode(mode: number): FileNode['type'] {
   return (mode & 0o170000) === 0o040000 ? 'folder' : 'file'
 }
@@ -547,11 +554,16 @@ export class RealSshSessionManager implements SshSessionManager {
 
   async listFiles(vm: VM, path: string): Promise<FileNode[]> {
     const sftp = await this.getSftp(vm)
+    const resolvedPath = expandRemotePath(vm, path)
 
     try {
       return await new Promise((resolveFiles, reject) => {
-        sftp.readdir(path, (error, list) => {
+        sftp.readdir(resolvedPath, (error, list) => {
           if (error) {
+            if (path.startsWith('~/grove') && (error as unknown as { code?: number }).code === 2) {
+              resolveFiles([])
+              return
+            }
             reject(error)
             return
           }
@@ -581,12 +593,14 @@ export class RealSshSessionManager implements SshSessionManager {
   async transferFile({ vm, direction, source, target, fileName, conflict }: FileTransferExecutionRequest): Promise<TransferJob> {
     const sftp = await this.getSftp(vm)
     const startedAtMs = Date.now()
+    const remoteSource = expandRemotePath(vm, source)
+    const remoteTarget = expandRemotePath(vm, target)
 
     try {
       if (direction === 'download') {
         mkdirSync(dirname(target), { recursive: true })
         await new Promise<void>((resolveTransfer, reject) => {
-          const readStream = sftp.createReadStream(source)
+          const readStream = sftp.createReadStream(remoteSource)
           const writeStream = createWriteStream(target)
           readStream.on('error', reject)
           writeStream.on('error', reject)
@@ -600,8 +614,9 @@ export class RealSshSessionManager implements SshSessionManager {
         if (!existsSync(sourcePath)) {
           throw new Error(`Local source file does not exist: ${source}`)
         }
+        await mkdirRemote(sftp, posix.dirname(remoteTarget))
         await new Promise<void>((resolveTransfer, reject) => {
-          sftp.fastPut(sourcePath, target, (error) => {
+          sftp.fastPut(sourcePath, remoteTarget, (error) => {
             if (error) {
               reject(error)
               return
@@ -631,16 +646,17 @@ export class RealSshSessionManager implements SshSessionManager {
   async uploadDirectory({ vm, sourcePath, targetPath }: DirectoryUploadExecutionRequest): Promise<DirectoryUploadResult> {
     const files = collectLocalProjectFiles(sourcePath)
     const sftp = await this.getSftp(vm)
+    const remoteTargetPath = expandRemotePath(vm, targetPath)
 
     try {
-      await mkdirRemote(sftp, targetPath)
+      await mkdirRemote(sftp, remoteTargetPath)
       const directories = Array.from(new Set(files.map((file) => posix.dirname(file.relativePath)).filter((path) => path !== '.')))
       for (const directory of directories) {
-        await mkdirRemote(sftp, posix.join(targetPath, directory))
+        await mkdirRemote(sftp, posix.join(remoteTargetPath, directory))
       }
 
       for (const file of files) {
-        await fastPut(sftp, file.localPath, posix.join(targetPath, file.relativePath))
+        await fastPut(sftp, file.localPath, posix.join(remoteTargetPath, file.relativePath))
       }
     } finally {
       sftp.end()

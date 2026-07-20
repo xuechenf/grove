@@ -28,6 +28,8 @@ interface FilesTabProps {
   onUpload: () => void
   onDownload: () => void
   onCopyRemotePath: () => void
+  workspaceShortcuts?: Array<{ id: string; label: string; localPath: string; remotePath: string }>
+  onOpenWorkspace?: (shortcut: { id: string; label: string; localPath: string; remotePath: string }) => void
 }
 
 interface FilePaneProps {
@@ -170,6 +172,8 @@ export function FilesTab({
   onUpload,
   onDownload,
   onCopyRemotePath,
+  workspaceShortcuts = [],
+  onOpenWorkspace,
 }: FilesTabProps) {
   const localSelection = localFiles.find((file) => file.id === selectedLocalId)
   const remoteSelection = remoteFiles.find((file) => file.id === selectedRemoteId)
@@ -213,6 +217,17 @@ export function FilesTab({
           </button>
         </div>
       </div>
+
+      {workspaceShortcuts.length ? (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-white px-3 py-2">
+          <span className="text-xs font-medium text-slate-500">Application workspaces</span>
+          {workspaceShortcuts.map((shortcut) => (
+            <button key={shortcut.id} type="button" onClick={() => onOpenWorkspace?.(shortcut)} className="inline-flex h-7 items-center gap-1.5 rounded border border-slate-200 px-2 text-xs font-medium text-slate-700 hover:bg-slate-50">
+              <FolderOpen className="h-3.5 w-3.5" />{shortcut.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="grid gap-2 lg:grid-cols-2">
         <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2">

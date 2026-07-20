@@ -31,7 +31,7 @@ const transferRequestSchema = z.object({
   conflict: z.enum(['overwrite', 'rename', 'skip']).optional(),
 })
 
-const tabSchema = z.enum(['overview', 'files', 'terminal', 'apprunner', 'activity', 'settings'])
+const tabSchema = z.enum(['overview', 'monitoring', 'applications', 'files', 'terminal', 'activity', 'settings'])
 
 const appRunnerSourceSchema = z.discriminatedUnion('type', [
   z.object({

@@ -20,6 +20,25 @@ function localId(path: string) {
   return `local-${path.replace(/[^a-z0-9_-]+/gi, '-')}`
 }
 
+const hiddenWorkspaceFolders = new Set([
+  '.git',
+  '.grove',
+  'node_modules',
+  'dist',
+  'dist-electron',
+  'release',
+])
+
+export function isProtectedLocalEntry(name: string) {
+  const normalized = name.toLowerCase()
+  if (hiddenWorkspaceFolders.has(normalized) || normalized.startsWith('release-')) return true
+  if (normalized === '.env.example') return false
+  return normalized === '.env'
+    || normalized.startsWith('.env.')
+    || /\.(pem|key|pfx|p12|csv)$/i.test(normalized)
+    || /(^|[-_.])(secret|secrets|credential|credentials|accesskey|accesskeys)([-_.]|$)/i.test(normalized)
+}
+
 export function listLocalFiles(path = process.cwd()): FileNode[] {
   const directory = resolve(path)
   // Listing is a read: a missing path returns nothing rather than being created on disk.
@@ -28,6 +47,7 @@ export function listLocalFiles(path = process.cwd()): FileNode[] {
   }
 
   return readdirSync(directory)
+    .filter((name) => !isProtectedLocalEntry(name))
     .map((name): FileNode | undefined => {
       const fullPath = join(directory, name)
       // Skip entries we cannot stat (dangling symlinks, Windows junctions that EPERM,

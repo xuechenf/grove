@@ -766,6 +766,7 @@ export interface GroveStoreOptions {
 function cloudMachineForAgent(machine: CloudMachine) {
   return {
     id: machine.id,
+    nativeId: machine.nativeId,
     provider: machine.provider,
     name: machine.name,
     location: machine.location,

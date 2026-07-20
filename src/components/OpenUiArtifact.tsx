@@ -10,7 +10,7 @@ interface OpenUiArtifactProps {
 }
 
 const actionKinds = new Set<OperatorBriefAction['kind']>(['focus_vm', 'open_tab', 'ask_followup', 'request_fix'])
-const tabs = new Set<TabId>(['overview', 'files', 'terminal', 'apprunner', 'activity', 'settings'])
+const tabs = new Set<TabId>(['overview', 'monitoring', 'applications', 'files', 'terminal', 'activity', 'settings'])
 
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined

@@ -6,8 +6,6 @@ import type {
   ApplicationEnvironmentInput,
   ApplicationDeployment,
   ApplicationVersion,
-  AppRunnerService,
-  AppRunnerServiceInput,
   AwsCredentialCsvImport,
   CloudFirewallRule,
   CloudFirewallRuleInput,
@@ -304,30 +302,6 @@ export function refreshVm(vmId: string) {
 
 export function deleteVm(vmId: string) {
   return requestJson<{ vmId: string }>(`/api/vms/${vmId}`, {
-    method: 'DELETE',
-  })
-}
-
-export function listAppRunnerServices(vmId: string) {
-  return requestJson<AppRunnerService[]>(`/api/vms/${vmId}/app-services`)
-}
-
-export function createAppRunnerService(vmId: string, input: AppRunnerServiceInput) {
-  return requestJson<AppRunnerService>(`/api/vms/${vmId}/app-services`, {
-    method: 'POST',
-    body: JSON.stringify(input),
-  })
-}
-
-export function updateAppRunnerService(vmId: string, serviceName: string, input: AppRunnerServiceInput) {
-  return requestJson<AppRunnerService>(`/api/vms/${vmId}/app-services/${encodeURIComponent(serviceName)}`, {
-    method: 'PATCH',
-    body: JSON.stringify(input),
-  })
-}
-
-export function deleteAppRunnerService(vmId: string, serviceName: string) {
-  return requestJson<{ serviceName: string }>(`/api/vms/${vmId}/app-services/${encodeURIComponent(serviceName)}`, {
     method: 'DELETE',
   })
 }

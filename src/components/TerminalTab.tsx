@@ -32,6 +32,14 @@ interface TerminalSessionViewProps {
 
 const quickCommands = ['ls', 'uptime', 'df -h', 'systemctl --failed', 'top']
 
+function terminalStatusLabel(status: string) {
+  if (status === 'open') return 'Connected'
+  if (status === 'connecting') return 'Connecting'
+  if (status === 'closed') return 'Disconnected'
+  if (status === 'local mock') return 'Local mock'
+  return status
+}
+
 let paneSequence = 0
 
 function nextPane(title?: string): TerminalPane {
@@ -327,7 +335,7 @@ function TerminalSessionView({ vm, pane, active, commandDispatch, onCommand }: T
         <span className="truncate">
           ssh -p {vm.connection.port} {vm.connection.user}@{vm.connection.host}
         </span>
-        <span className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-slate-500">{status}</span>
+        <span className="shrink-0 rounded border border-slate-200 px-1.5 py-0.5 text-slate-500">{terminalStatusLabel(status)}</span>
       </div>
       <div ref={containerRef} className="grove-terminal min-h-0 flex-1 overflow-hidden bg-white" />
     </div>

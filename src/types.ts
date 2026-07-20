@@ -1,4 +1,4 @@
-export type TabId = 'overview' | 'files' | 'terminal' | 'apprunner' | 'activity' | 'settings'
+export type TabId = 'overview' | 'monitoring' | 'applications' | 'files' | 'terminal' | 'activity' | 'settings'
 
 export type VMHealth = 'healthy' | 'warning' | 'critical' | 'offline'
 
@@ -393,6 +393,8 @@ export interface CloudFirewallSummary {
 /** Provider-neutral existing VM metadata returned by Grove's cloud control plane. */
 export interface CloudMachine {
   id: string
+  /** Provider-native instance identifier, such as an EC2 instance ID or ECS instance ID. */
+  nativeId?: string
   provider: 'aws' | 'azure' | 'alicloud'
   credentialProfileId: string
   credentialProfileName: string
