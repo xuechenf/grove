@@ -32,6 +32,7 @@ export function resolveProjectStateReference(path: string) {
 export function localDefaults() {
   return {
     workspacePath: process.cwd(),
+    homePath: homedir(),
     downloadsPath: ensureProjectStateDir('downloads'),
     localFilesPath: ensureProjectStateDir('local-files'),
     pathSeparator: sep,

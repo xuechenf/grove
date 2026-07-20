@@ -1,5 +1,5 @@
 import { ArrowUp, Download, FileText, Folder, FolderOpen, Laptop, RefreshCw, Server, Upload } from 'lucide-react'
-import type { ReactNode } from 'react'
+import type { FormEvent, ReactNode } from 'react'
 import { formatBytes } from '../lib/format'
 import type { FileNode, VM } from '../types'
 
@@ -20,6 +20,8 @@ interface FilesTabProps {
   onActivateLocal: (file: FileNode) => void
   onActivateRemote: (file: FileNode) => void
   onLocalUp: () => void
+  onNavigateLocal: (path: string) => void
+  onChooseLocalFolder?: () => void
   onRefreshLocal: () => void
   onOpenLocalFolder: () => void
   onOpenRemoteFolder: (file: FileNode) => void
@@ -28,6 +30,7 @@ interface FilesTabProps {
   onUpload: () => void
   onDownload: () => void
   onCopyRemotePath: () => void
+  localLocations?: Array<{ id: string; label: string; path: string }>
   workspaceShortcuts?: Array<{ id: string; label: string; localPath: string; remotePath: string }>
   onOpenWorkspace?: (shortcut: { id: string; label: string; localPath: string; remotePath: string }) => void
 }
@@ -164,6 +167,8 @@ export function FilesTab({
   onActivateLocal,
   onActivateRemote,
   onLocalUp,
+  onNavigateLocal,
+  onChooseLocalFolder,
   onRefreshLocal,
   onOpenLocalFolder,
   onOpenRemoteFolder,
@@ -172,14 +177,22 @@ export function FilesTab({
   onUpload,
   onDownload,
   onCopyRemotePath,
+  localLocations = [],
   workspaceShortcuts = [],
   onOpenWorkspace,
 }: FilesTabProps) {
   const localSelection = localFiles.find((file) => file.id === selectedLocalId)
   const remoteSelection = remoteFiles.find((file) => file.id === selectedRemoteId)
 
+  function submitLocalPath(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const formData = new FormData(event.currentTarget)
+    const path = formData.get('localPath')
+    onNavigateLocal(typeof path === 'string' ? path : '')
+  }
+
   return (
-    <div className="space-y-3" data-testid="files-tab">
+    <div className="@container space-y-3" data-testid="files-tab">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-slate-950">Dual-pane file transfer</h2>
@@ -229,36 +242,83 @@ export function FilesTab({
         </div>
       ) : null}
 
-      <div className="grid gap-2 lg:grid-cols-2">
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2">
-          <div className="min-w-0 truncate text-xs text-slate-500">
-            <span className="font-medium text-slate-700">Local:</span> {localPath}
-          </div>
-          <div className="flex gap-2">
+      <div className="grid gap-2 @min-[760px]:grid-cols-2">
+        <div className="space-y-2 rounded border border-slate-200 bg-white px-3 py-2">
+          <form className="flex min-w-0 flex-wrap items-center gap-2" onSubmit={submitLocalPath}>
+            <label htmlFor="grove-local-path" className="shrink-0 text-xs font-medium text-slate-700">
+              Local
+            </label>
+            <input
+              id="grove-local-path"
+              key={localPath}
+              name="localPath"
+              aria-label="Local directory path"
+              defaultValue={localPath}
+              className="h-8 min-w-[160px] flex-1 rounded border border-slate-200 bg-white px-2.5 font-mono text-xs text-slate-700 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
+              spellCheck={false}
+              autoComplete="off"
+              required
+            />
             <button
-              type="button"
-              onClick={onLocalUp}
-              className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+              type="submit"
+              disabled={localLoading}
+              className="inline-flex h-8 items-center rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-45"
             >
-              <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
-              Up
+              Go
             </button>
-            <button
-              type="button"
-              onClick={onOpenLocalFolder}
-              className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-            >
-              <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
-              Open local folder
-            </button>
-            <button
-              type="button"
-              onClick={onRefreshLocal}
-              className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-            >
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-              Refresh
-            </button>
+            {onChooseLocalFolder ? (
+              <button
+                type="button"
+                onClick={onChooseLocalFolder}
+                className="inline-flex h-8 items-center gap-2 rounded border border-slate-900 bg-slate-900 px-2.5 text-xs font-medium text-white transition hover:bg-slate-800"
+              >
+                <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                Browse...
+              </button>
+            ) : null}
+          </form>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-1.5">
+              {localLocations.map((location) => (
+                <button
+                  key={location.id}
+                  type="button"
+                  title={location.path}
+                  onClick={() => onNavigateLocal(location.path)}
+                  className={location.path === localPath
+                    ? 'h-7 rounded bg-slate-100 px-2 text-[11px] font-medium text-slate-900'
+                    : 'h-7 rounded px-2 text-[11px] font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800'}
+                >
+                  {location.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={onLocalUp}
+                className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+              >
+                <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+                Up
+              </button>
+              <button
+                type="button"
+                onClick={onOpenLocalFolder}
+                className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+              >
+                <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                Open in Explorer
+              </button>
+              <button
+                type="button"
+                onClick={onRefreshLocal}
+                className="inline-flex h-8 items-center gap-2 rounded border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                Refresh
+              </button>
+            </div>
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-3 py-2">
@@ -287,7 +347,7 @@ export function FilesTab({
         </div>
       </div>
 
-      <div className="grid min-h-0 gap-3 xl:grid-cols-2">
+      <div className="grid min-h-0 gap-3 @min-[900px]:grid-cols-2">
         <FilePane
           title="Local machine"
           subtitle={localPath}

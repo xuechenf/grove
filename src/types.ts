@@ -770,6 +770,7 @@ export interface AuditEvent extends ActivityEvent {
 
 export interface LocalDefaults {
   workspacePath: string
+  homePath: string
   downloadsPath: string
   localFilesPath: string
   pathSeparator: string

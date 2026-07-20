@@ -18,6 +18,7 @@ async function openOrchid(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   window.localStorage.clear()
+  delete window.groveDesktop
   document.documentElement.removeAttribute('data-grove-theme')
   document.documentElement.style.colorScheme = ''
 })
@@ -48,6 +49,32 @@ describe('Grove VM console', () => {
     expect(screen.getByTestId('files-tab')).toBeInTheDocument()
     expect(screen.getByText('Local machine')).toBeInTheDocument()
     expect(screen.getAllByText('compose-prod.yml').length).toBeGreaterThan(1)
+  })
+
+  it('opens a Windows drive through the editable local path', async () => {
+    const { user } = setup()
+    await openOrchid(user)
+    await user.click(screen.getByRole('tab', { name: /Files/i }))
+
+    const input = screen.getByRole('textbox', { name: 'Local directory path' })
+    await user.clear(input)
+    await user.type(input, 'd:')
+    await user.click(screen.getByRole('button', { name: 'Go' }))
+
+    expect(screen.getByRole('textbox', { name: 'Local directory path' })).toHaveValue('D:\\')
+  })
+
+  it('uses the desktop folder picker when the Electron bridge is available', async () => {
+    const chooseLocalDirectory = vi.fn().mockResolvedValue('D:\\projects\\grove')
+    window.groveDesktop = { chooseLocalDirectory }
+    const { user } = setup()
+    await openOrchid(user)
+    await user.click(screen.getByRole('tab', { name: /Files/i }))
+
+    await user.click(screen.getByRole('button', { name: 'Browse...' }))
+
+    await waitFor(() => expect(chooseLocalDirectory).toHaveBeenCalledOnce())
+    expect(screen.getByRole('textbox', { name: 'Local directory path' })).toHaveValue('D:\\projects\\grove')
   })
 
   it('keeps the transfer queue scoped to the files tab', async () => {

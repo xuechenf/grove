@@ -1,6 +1,6 @@
 {
   "name": "grove",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Local-first VM management web app with SSH, SFTP, terminal sessions, and Kimi-assisted operations.",
   "license": "MIT",
   "type": "module",

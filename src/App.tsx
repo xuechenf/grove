@@ -79,6 +79,7 @@ import {
   updateVm as updateVmProfile,
 } from './lib/api'
 import { cx } from './lib/format'
+import { normalizeLocalPathInput, parentLocalPath } from './lib/localPath'
 import {
   initialMessages,
   initialProposals,
@@ -140,6 +141,7 @@ const MAX_INFO_PANEL_PERCENT = 68
 
 const fallbackLocalDefaults: LocalDefaults = {
   workspacePath: localFiles[0]?.path ?? '.',
+  homePath: localFiles[0]?.path ?? '.',
   downloadsPath: localFiles[0]?.path ?? '.',
   localFilesPath: localFiles[0]?.path ?? '.',
   pathSeparator: '/',
@@ -162,6 +164,7 @@ const initialProviderStatus: CopilotProviderStatus = {
 }
 
 const THEME_STORAGE_KEY = 'grove-theme'
+const LOCAL_PATH_STORAGE_KEY = 'grove-local-files-path'
 
 function isAppTheme(value: string | null): value is AppTheme {
   return value === 'system' || value === 'light' || value === 'dark'
@@ -177,6 +180,26 @@ function initialTheme(): AppTheme {
     return isAppTheme(saved) ? saved : 'system'
   } catch {
     return 'system'
+  }
+}
+
+function savedLocalPath() {
+  if (typeof window === 'undefined') {
+    return undefined
+  }
+
+  try {
+    return window.localStorage.getItem(LOCAL_PATH_STORAGE_KEY)?.trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function rememberLocalPath(path: string) {
+  try {
+    window.localStorage.setItem(LOCAL_PATH_STORAGE_KEY, path)
+  } catch {
+    // A disabled or full localStorage should not block file navigation.
   }
 }
 
@@ -227,26 +250,6 @@ function parentRemotePath(path: string) {
 
   const parent = normalized.slice(0, normalized.lastIndexOf('/')) || '/'
   return parent
-}
-
-function parentLocalPath(path: string) {
-  const normalized = path.replace(/[\\/]+$/, '')
-  // Already at a filesystem root: "/" (POSIX) or "C:"/"C:\\" (Windows drive).
-  if (normalized === '' || /^[A-Za-z]:$/.test(normalized)) {
-    return path
-  }
-
-  const slashIndex = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'))
-  if (slashIndex < 0) {
-    return normalized
-  }
-  if (slashIndex === 0) {
-    return '/' // POSIX top-level dir like "/Users" -> root "/"
-  }
-
-  const parent = normalized.slice(0, slashIndex)
-  // Windows drive root: "C:\\Users" -> "C:\\", not the bare "C:".
-  return /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent
 }
 
 function joinLocalPath(directory: string, fileName: string, separator: string) {
@@ -854,7 +857,9 @@ function App() {
         }
 
         setLocalDefaults(defaults)
-        setLocalPath((current) => (current === fallbackLocalDefaults.workspacePath ? defaults.workspacePath : current))
+        setLocalPath((current) => (
+          current === fallbackLocalDefaults.workspacePath ? savedLocalPath() ?? defaults.workspacePath : current
+        ))
       })
       .catch(() => {
         // Fixture defaults keep the UI usable when the backend is restarting.
@@ -887,6 +892,7 @@ function App() {
         }
 
         setLocalFilesState(files)
+        rememberLocalPath(path)
         setSelectedLocalId((current) => {
           if (current && files.some((file) => file.id === current)) {
             return current
@@ -1201,8 +1207,36 @@ function App() {
   }
 
   function goLocalUp() {
-    setLocalPath(parentLocalPath(localPath))
+    setLocalPath(parentLocalPath(localPath, localDefaults.pathSeparator))
     setSelectedLocalId(undefined)
+  }
+
+  function navigateToLocalPath(path: string) {
+    const normalized = normalizeLocalPathInput(path, localDefaults.pathSeparator)
+    if (!normalized) {
+      setLocalError('Enter a local directory path.')
+      return
+    }
+
+    setLocalError(undefined)
+    setLocalPath(normalized)
+    setSelectedLocalId(undefined)
+  }
+
+  async function chooseLocalFolder() {
+    const picker = window.groveDesktop?.chooseLocalDirectory
+    if (!picker) {
+      return
+    }
+
+    try {
+      const selectedPath = await picker(localPath)
+      if (selectedPath) {
+        navigateToLocalPath(selectedPath)
+      }
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : 'The local folder picker could not be opened.')
+    }
   }
 
   function refreshLocalFiles() {
@@ -1814,6 +1848,8 @@ function App() {
                     onActivateLocal={activateLocalFile}
                     onActivateRemote={activateRemoteFile}
                     onLocalUp={goLocalUp}
+                    onNavigateLocal={navigateToLocalPath}
+                    onChooseLocalFolder={window.groveDesktop?.chooseLocalDirectory ? chooseLocalFolder : undefined}
                     onRefreshLocal={refreshLocalFiles}
                     onOpenLocalFolder={openCurrentLocalFolder}
                     onOpenRemoteFolder={openRemoteFolder}
@@ -1822,6 +1858,12 @@ function App() {
                     onUpload={uploadSelected}
                     onDownload={downloadSelected}
                     onCopyRemotePath={copyRemotePath}
+                    localLocations={[
+                      { id: 'workspace', label: 'Grove workspace', path: groveSettings.workspacePath },
+                      { id: 'home', label: 'Home', path: localDefaults.homePath },
+                      { id: 'downloads', label: 'Downloads', path: localDefaults.downloadsPath },
+                    ].filter((location, index, locations) =>
+                      locations.findIndex((candidate) => candidate.path === location.path) === index)}
                     workspaceShortcuts={applications.flatMap((application) => {
                       const instance = application.instances.find((candidate) => candidate.vmId === selectedVm.id)
                       return instance ? [{ id: application.id, label: application.name, localPath: application.managedSourcePath, remotePath: instance.remotePath }] : []

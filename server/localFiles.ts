@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { readdirSync, statSync } from 'node:fs'
+import { basename, join, posix, win32 } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { FileNode } from '../src/types'
 import { localDefaults } from './projectState'
@@ -39,14 +39,59 @@ export function isProtectedLocalEntry(name: string) {
     || /(^|[-_.])(secret|secrets|credential|credentials|accesskey|accesskeys)([-_.]|$)/i.test(normalized)
 }
 
-export function listLocalFiles(path = process.cwd()): FileNode[] {
-  const directory = resolve(path)
-  // Listing is a read: a missing path returns nothing rather than being created on disk.
-  if (!existsSync(directory)) {
-    return []
+export function normalizeLocalDirectoryPath(path: string, platform = process.platform) {
+  const trimmed = path.trim()
+  if (!trimmed) {
+    throw new Error('Enter a local directory path.')
   }
 
-  return readdirSync(directory)
+  if (platform === 'win32') {
+    const candidate = /^[A-Za-z]:$/.test(trimmed) ? `${trimmed}\\` : trimmed
+    return win32.resolve(candidate)
+  }
+
+  return posix.resolve(trimmed)
+}
+
+function localDirectoryStat(path: string) {
+  try {
+    return statSync(path)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') {
+      throw new Error(`Local directory not found: ${path}`, { cause: error })
+    }
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new Error(`Access denied to local directory: ${path}`, { cause: error })
+    }
+    throw new Error(`Local directory could not be opened: ${path}`, { cause: error })
+  }
+}
+
+export function resolveLocalDirectory(path = process.cwd()) {
+  const directory = normalizeLocalDirectoryPath(path)
+  const stat = localDirectoryStat(directory)
+  if (!stat.isDirectory()) {
+    throw new Error(`The selected local path is not a directory: ${directory}`)
+  }
+  return directory
+}
+
+export function listLocalFiles(path = process.cwd()): FileNode[] {
+  const directory = resolveLocalDirectory(path)
+
+  let names: string[]
+  try {
+    names = readdirSync(directory)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new Error(`Access denied to local directory: ${directory}`, { cause: error })
+    }
+    throw new Error(`Local directory could not be read: ${directory}`, { cause: error })
+  }
+
+  return names
     .filter((name) => !isProtectedLocalEntry(name))
     .map((name): FileNode | undefined => {
       const fullPath = join(directory, name)
@@ -80,8 +125,7 @@ export function listLocalFiles(path = process.cwd()): FileNode[] {
 }
 
 export function openLocalFolder(path = process.cwd()) {
-  const directory = resolve(path)
-  mkdirSync(directory, { recursive: true })
+  const directory = resolveLocalDirectory(path)
 
   const command =
     process.platform === 'win32'
@@ -99,6 +143,6 @@ export function openLocalFolder(path = process.cwd()) {
 
   return {
     path: directory,
-    name: basename(directory),
+    name: basename(directory) || directory,
   }
 }

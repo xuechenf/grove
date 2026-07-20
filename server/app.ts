@@ -181,6 +181,7 @@ const vmConnectionSchema = z.object({
 })
 
 type AsyncHandler = (request: Request, response: Response) => Promise<void>
+type SyncHandler = (request: Request, response: Response) => void
 
 function errorPayload(error: unknown) {
   if (error instanceof z.ZodError) {
@@ -205,6 +206,16 @@ function asyncRoute(handler: AsyncHandler) {
     handler(request, response).catch((error: unknown) => {
       sendErrorResponse(response, error)
     })
+  }
+}
+
+function syncRoute(handler: SyncHandler) {
+  return (request: Request, response: Response) => {
+    try {
+      handler(request, response)
+    } catch (error) {
+      sendErrorResponse(response, error)
+    }
   }
 }
 
@@ -587,19 +598,19 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
     }),
   )
 
-  app.get('/api/local/files', (request, response) => {
+  app.get('/api/local/files', syncRoute((request, response) => {
     const path = typeof request.query.path === 'string' ? request.query.path : process.cwd()
     response.json(listLocalFiles(path))
-  })
+  }))
 
   app.get('/api/local/defaults', (_request, response) => {
     response.json(localDefaults())
   })
 
-  app.post('/api/local/open-folder', (request, response) => {
+  app.post('/api/local/open-folder', syncRoute((request, response) => {
     const body = localPathSchema.parse(request.body)
     response.json(openLocalFolder(body.path))
-  })
+  }))
 
   app.post(
     '/api/vms/:vmId/commands',

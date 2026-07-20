@@ -1,4 +1,8 @@
-// Minimal preload. The renderer is the existing Grove web app served over HTTP and needs no Node
-// bridge today. This file exists as a hardening seam (contextIsolation stays on) and a place to
-// expose narrowly-scoped IPC later if desktop-only features are added.
-export {}
+import { contextBridge, ipcRenderer } from 'electron'
+
+// Keep the desktop bridge deliberately narrow: the renderer can request a directory from the
+// operating-system picker, but it never receives general Electron, Node, or filesystem access.
+contextBridge.exposeInMainWorld('groveDesktop', {
+  chooseLocalDirectory: (currentPath: string) =>
+    ipcRenderer.invoke('grove:choose-local-directory', currentPath) as Promise<string | null>,
+})

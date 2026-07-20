@@ -245,6 +245,7 @@ vms:
       expect(defaultInventoryPath()).toBe(join(tempDir, 'inventory.yaml'))
       expect(defaultAppRunnerPath()).toBe(join(tempDir, 'apprunner.yaml'))
       expect(localEnvPath()).toBe(join(tempDir, '.env.local'))
+      expect(defaults.body.homePath).toBeTruthy()
       expect(defaults.body.downloadsPath).toBe(join(tempDir, 'downloads'))
       expect(defaults.body.localFilesPath).toBe(join(tempDir, 'local-files'))
     } finally {
@@ -252,16 +253,33 @@ vms:
     }
   })
 
-  it('lists a missing local folder as empty without creating it', async () => {
+  it('reports a missing local folder without creating it', async () => {
     const { app } = createGroveApp()
     const missing = join(tmpdir(), `grove-does-not-exist-${Date.now()}`)
 
     const response = await request(app)
       .get(`/api/local/files?path=${encodeURIComponent(missing)}`)
-      .expect(200)
+      .expect(404)
 
-    expect(response.body).toEqual([])
+    expect(response.body.error).toContain('Local directory not found')
     expect(existsSync(missing)).toBe(false)
+  })
+
+  it('reports when a local file is used as a directory', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'grove-local-path-'))
+    const filePath = join(tempDir, 'not-a-folder.txt')
+    writeFileSync(filePath, 'file')
+
+    try {
+      const { app } = createGroveApp()
+      const response = await request(app)
+        .get(`/api/local/files?path=${encodeURIComponent(filePath)}`)
+        .expect(400)
+
+      expect(response.body.error).toContain('not a directory')
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 
   it('resolves relative SSH key paths from the project state directory', () => {

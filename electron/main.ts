@@ -1,4 +1,4 @@
-import { app, BrowserWindow, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import { join } from 'node:path'
 import { startGroveServer, type GroveServerHandle } from '../server/start'
 import { BlobCredentialVault } from '../server/credentialVault'
@@ -10,6 +10,20 @@ const devServerUrl = process.env.VITE_DEV_SERVER_URL
 
 let serverHandle: GroveServerHandle | undefined
 let mainWindow: BrowserWindow | undefined
+
+ipcMain.handle('grove:choose-local-directory', async (event, currentPath: unknown) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) {
+    throw new Error('The local folder picker is not available for this window.')
+  }
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a local folder',
+    defaultPath: typeof currentPath === 'string' && currentPath.trim() ? currentPath : app.getPath('home'),
+    properties: ['openDirectory'],
+  })
+
+  return result.canceled ? null : result.filePaths[0] ?? null
+})
 
 /** Packaged layout: app.asar/dist-electron/main.js -> the built UI sits at app.asar/dist. */
 function resolveStaticDir() {
