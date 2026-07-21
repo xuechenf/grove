@@ -10,7 +10,7 @@ import {
   StopInstancesCommand,
   type Instance,
 } from '@aws-sdk/client-ec2'
-import { CloudWatchClient, GetMetricDataCommand, type MetricDataQuery } from '@aws-sdk/client-cloudwatch'
+import { CloudWatchClient, GetMetricDataCommand, type GetMetricDataCommandOutput, type MetricDataQuery } from '@aws-sdk/client-cloudwatch'
 import type { CloudMachinePowerAction } from '../src/types'
 import type {
   CloudProviderAdapter,
@@ -89,20 +89,25 @@ function errorCode(error: unknown) {
 
 async function describeRegion(context: CloudProviderContext, region: string) {
   const client = ec2(context, region)
-  const machines: ProviderMachine[] = []
-  let nextToken: string | undefined
-  do {
-    const page = await client.send(new DescribeInstancesCommand({ NextToken: nextToken }))
-    for (const reservation of page.Reservations ?? []) {
-      for (const instance of reservation.Instances ?? []) {
-        const machine = toMachine(instance, region)
-        if (machine) machines.push(machine)
+  try {
+    const machines: ProviderMachine[] = []
+    let nextToken: string | undefined
+    do {
+      const page = await client.send(new DescribeInstancesCommand({ NextToken: nextToken }))
+      for (const reservation of page.Reservations ?? []) {
+        for (const instance of reservation.Instances ?? []) {
+          const machine = toMachine(instance, region)
+          if (machine) machines.push(machine)
+        }
       }
-    }
-    nextToken = page.NextToken
-  } while (nextToken)
-  client.destroy()
-  return machines
+      nextToken = page.NextToken
+    } while (nextToken)
+    return machines
+  } finally {
+    // destroy() closes the client's keep-alive sockets; it must run on error paths too,
+    // otherwise every failed call leaks connections in this long-lived process.
+    client.destroy()
+  }
 }
 
 async function withConcurrency<T, R>(items: T[], concurrency: number, run: (item: T) => Promise<R>) {
@@ -140,9 +145,12 @@ export class AwsCloudAdapter implements CloudProviderAdapter {
     let regions = configuredRegions(context)
     if (!regions.length) {
       const client = ec2(context, defaultRegion)
-      const result = await client.send(new DescribeRegionsCommand({ AllRegions: false }))
-      regions = (result.Regions ?? []).map((region) => region.RegionName).filter((region): region is string => Boolean(region))
-      client.destroy()
+      try {
+        const result = await client.send(new DescribeRegionsCommand({ AllRegions: false }))
+        regions = (result.Regions ?? []).map((region) => region.RegionName).filter((region): region is string => Boolean(region))
+      } finally {
+        client.destroy()
+      }
     }
     regions = [...new Set(regions)].sort()
     const settled = await withConcurrency(regions, 4, (region) => describeRegion(context, region))
@@ -158,38 +166,41 @@ export class AwsCloudAdapter implements CloudProviderAdapter {
   async listFirewallRules(context: CloudProviderContext, machine: ProviderMachine) {
     if (!machine.firewalls.length) return []
     const client = ec2(context, machine.location)
-    const output: ProviderFirewallRule[] = []
-    for (const firewall of machine.firewalls) {
-      let nextToken: string | undefined
-      do {
-        const page = await client.send(new DescribeSecurityGroupRulesCommand({
-          Filters: [{ Name: 'group-id', Values: [firewall.nativeId] }],
-          NextToken: nextToken,
-        }))
-        for (const rule of page.SecurityGroupRules ?? []) {
-          if (!rule.SecurityGroupRuleId) continue
-          output.push({
-            nativeId: rule.SecurityGroupRuleId,
-            firewallNativeId: firewall.nativeId,
-            firewallName: firewall.name,
-            direction: rule.IsEgress ? 'egress' : 'ingress',
-            protocol: rule.IpProtocol ?? 'all',
-            fromPort: rule.FromPort,
-            toPort: rule.ToPort,
-            source:
-              rule.CidrIpv4 ??
-              rule.CidrIpv6 ??
-              rule.PrefixListId ??
-              rule.ReferencedGroupInfo?.GroupId ??
-              'unknown',
-            description: rule.Description,
-          })
-        }
-        nextToken = page.NextToken
-      } while (nextToken)
+    try {
+      const output: ProviderFirewallRule[] = []
+      for (const firewall of machine.firewalls) {
+        let nextToken: string | undefined
+        do {
+          const page = await client.send(new DescribeSecurityGroupRulesCommand({
+            Filters: [{ Name: 'group-id', Values: [firewall.nativeId] }],
+            NextToken: nextToken,
+          }))
+          for (const rule of page.SecurityGroupRules ?? []) {
+            if (!rule.SecurityGroupRuleId) continue
+            output.push({
+              nativeId: rule.SecurityGroupRuleId,
+              firewallNativeId: firewall.nativeId,
+              firewallName: firewall.name,
+              direction: rule.IsEgress ? 'egress' : 'ingress',
+              protocol: rule.IpProtocol ?? 'all',
+              fromPort: rule.FromPort,
+              toPort: rule.ToPort,
+              source:
+                rule.CidrIpv4 ??
+                rule.CidrIpv6 ??
+                rule.PrefixListId ??
+                rule.ReferencedGroupInfo?.GroupId ??
+                'unknown',
+              description: rule.Description,
+            })
+          }
+          nextToken = page.NextToken
+        } while (nextToken)
+      }
+      return output
+    } finally {
+      client.destroy()
     }
-    client.destroy()
-    return output
   }
 
   async addFirewallRule(
@@ -204,16 +215,19 @@ export class AwsCloudAdapter implements CloudProviderAdapter {
     const client = ec2(context, machine.location)
     const range = { CidrIp: input.cidr, Description: input.description?.trim() || 'Managed by Grove' }
     const range6 = { CidrIpv6: input.cidr, Description: input.description?.trim() || 'Managed by Grove' }
-    await client.send(new AuthorizeSecurityGroupIngressCommand({
-      GroupId: firewallNativeId,
-      IpPermissions: [{
-        IpProtocol: input.protocol,
-        FromPort: input.fromPort,
-        ToPort: input.toPort,
-        ...(input.cidr.includes(':') ? { Ipv6Ranges: [range6] } : { IpRanges: [range] }),
-      }],
-    }))
-    client.destroy()
+    try {
+      await client.send(new AuthorizeSecurityGroupIngressCommand({
+        GroupId: firewallNativeId,
+        IpPermissions: [{
+          IpProtocol: input.protocol,
+          FromPort: input.fromPort,
+          ToPort: input.toPort,
+          ...(input.cidr.includes(':') ? { Ipv6Ranges: [range6] } : { IpRanges: [range] }),
+        }],
+      }))
+    } finally {
+      client.destroy()
+    }
   }
 
   async removeFirewallRule(
@@ -226,11 +240,14 @@ export class AwsCloudAdapter implements CloudProviderAdapter {
       throw new Error('The selected firewall is not attached to this cloud machine.')
     }
     const client = ec2(context, machine.location)
-    await client.send(new RevokeSecurityGroupIngressCommand({
-      GroupId: firewallNativeId,
-      SecurityGroupRuleIds: [ruleNativeId],
-    }))
-    client.destroy()
+    try {
+      await client.send(new RevokeSecurityGroupIngressCommand({
+        GroupId: firewallNativeId,
+        SecurityGroupRuleIds: [ruleNativeId],
+      }))
+    } finally {
+      client.destroy()
+    }
   }
 
   async getMetrics(context: CloudProviderContext, machine: ProviderMachine, hours: number): Promise<ProviderMachineMetrics> {
@@ -246,13 +263,17 @@ export class AwsCloudAdapter implements CloudProviderAdapter {
       query.MetricStat!.Metric!.Dimensions = [{ Name: 'InstanceId', Value: machine.nativeId }]
     }
     const client = new CloudWatchClient({ region: machine.location, credentials: credentials(context) })
-    const result = await client.send(new GetMetricDataCommand({
-      StartTime: start,
-      EndTime: end,
-      MetricDataQueries: queries,
-      ScanBy: 'TimestampAscending',
-    }))
-    client.destroy()
+    let result: GetMetricDataCommandOutput
+    try {
+      result = await client.send(new GetMetricDataCommand({
+        StartTime: start,
+        EndTime: end,
+        MetricDataQueries: queries,
+        ScanBy: 'TimestampAscending',
+      }))
+    } finally {
+      client.destroy()
+    }
     const definitions = {
       cpu: { key: 'cpuPercent' as const, label: 'CPU utilization', unit: 'Percent' },
       networkin: { key: 'networkInBytes' as const, label: 'Network in', unit: 'Bytes' },
@@ -280,17 +301,20 @@ export class AwsCloudAdapter implements CloudProviderAdapter {
 
   async power(context: CloudProviderContext, machine: ProviderMachine, action: CloudMachinePowerAction) {
     const client = ec2(context, machine.location)
-    switch (action) {
-      case 'start':
-        await client.send(new StartInstancesCommand({ InstanceIds: [machine.nativeId] }))
-        break
-      case 'stop':
-        await client.send(new StopInstancesCommand({ InstanceIds: [machine.nativeId] }))
-        break
-      case 'reboot':
-        await client.send(new RebootInstancesCommand({ InstanceIds: [machine.nativeId] }))
-        break
+    try {
+      switch (action) {
+        case 'start':
+          await client.send(new StartInstancesCommand({ InstanceIds: [machine.nativeId] }))
+          break
+        case 'stop':
+          await client.send(new StopInstancesCommand({ InstanceIds: [machine.nativeId] }))
+          break
+        case 'reboot':
+          await client.send(new RebootInstancesCommand({ InstanceIds: [machine.nativeId] }))
+          break
+      }
+    } finally {
+      client.destroy()
     }
-    client.destroy()
   }
 }

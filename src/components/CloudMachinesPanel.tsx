@@ -9,6 +9,7 @@ import {
   listCloudMachines,
   removeCloudFirewallRule,
 } from '../lib/api'
+import { formatFirewallRule } from '../lib/format'
 import type {
   CloudFirewallRule,
   CloudFirewallRuleInput,
@@ -82,7 +83,14 @@ export function CloudMachinesPanel() {
     let cancelled = false
     Promise.resolve()
       .then(() => {
-        if (!cancelled) setDetailLoading(true)
+        if (!cancelled) {
+          // Switching machines (or retrying) drops the previous error and the stale
+          // rules/metrics of the machine they belonged to.
+          setDetailLoading(true)
+          setError(undefined)
+          setRules([])
+          setMetrics(undefined)
+        }
         return Promise.all([listCloudFirewallRules(selectedId), getCloudMachineMetrics(selectedId, 1)])
       })
       .then(([nextRules, nextMetrics]) => {
@@ -133,7 +141,7 @@ export function CloudMachinesPanel() {
   }
 
   async function removeRule(rule: CloudFirewallRule) {
-    if (!selected || !window.confirm(`Remove ${rule.protocol} ${rule.fromPort ?? 'all'}-${rule.toPort ?? 'all'} from ${rule.source}?`)) return
+    if (!selected || !window.confirm(`Remove ${formatFirewallRule(rule)} from ${rule.source}?`)) return
     setMutating(true)
     setError(undefined)
     try {
@@ -150,7 +158,7 @@ export function CloudMachinesPanel() {
   const networkOut = latestMetric(metrics, 'networkOutBytes')
 
   return (
-    <section className="rounded border border-slate-200 bg-white" data-testid="cloud-machines-panel">
+    <section className="@container rounded border border-slate-200 bg-white" data-testid="cloud-machines-panel">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-3 py-2">
         <div>
           <h3 className="text-sm font-semibold text-slate-950">Cloud access</h3>
@@ -171,8 +179,8 @@ export function CloudMachinesPanel() {
       ) : inventory.machines.length === 0 ? (
         <p className="px-3 py-4 text-sm text-slate-500">Import and test a cloud credential in Grove settings to discover existing machines. No resource-creation operation is available.</p>
       ) : (
-        <div className="grid min-h-[260px] lg:grid-cols-[220px_1fr]">
-          <div className="border-b border-slate-200 lg:border-b-0 lg:border-r">
+        <div className="grid min-h-[260px] @min-[700px]:grid-cols-[220px_1fr]">
+          <div className="border-b border-slate-200 @min-[700px]:border-b-0 @min-[700px]:border-r">
             {inventory.machines.map((machine) => (
               <button key={machine.id} type="button" onClick={() => {
                 setSelectedId(machine.id)
@@ -189,9 +197,9 @@ export function CloudMachinesPanel() {
           {selected ? (
             <div className="min-w-0 p-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0 flex-1">
                   <h4 className="font-semibold text-slate-950">{selected.name}</h4>
-                  <p className="text-xs text-slate-500">{selected.machineType ?? 'unknown type'} · {selected.zone ?? selected.location} · {selected.imageId ?? 'unknown image'}</p>
+                  <p className="break-all text-xs text-slate-500">{selected.machineType ?? 'unknown type'} · {selected.zone ?? selected.location} · {selected.imageId ?? 'unknown image'}</p>
                 </div>
                 <div className="flex gap-1">
                   <button type="button" title="Start" disabled={mutating || selected.state === 'running'} onClick={() => void power('start')} className="icon-action"><Play className="h-3.5 w-3.5" /></button>
@@ -200,7 +208,7 @@ export function CloudMachinesPanel() {
                 </div>
               </div>
 
-              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              <div className="mt-3 grid gap-2 @min-[480px]:grid-cols-3">
                 <div className="rounded border border-slate-200 p-2"><span className="flex items-center gap-1 text-[10px] uppercase text-slate-500"><Activity className="h-3 w-3" /> CPU</span><strong className="mt-1 block text-sm">{cpu === undefined ? '—' : `${cpu.toFixed(1)}%`}</strong></div>
                 <div className="rounded border border-slate-200 p-2"><span className="text-[10px] uppercase text-slate-500">Network in</span><strong className="mt-1 block text-sm">{networkIn === undefined ? '—' : `${Math.round(networkIn / 1024)} KB`}</strong></div>
                 <div className="rounded border border-slate-200 p-2"><span className="text-[10px] uppercase text-slate-500">Network out</span><strong className="mt-1 block text-sm">{networkOut === undefined ? '—' : `${Math.round(networkOut / 1024)} KB`}</strong></div>
@@ -211,14 +219,14 @@ export function CloudMachinesPanel() {
                 <button type="button" disabled={!selected.firewalls.length || mutating} onClick={() => setShowAddRule((value) => !value)} className="inline-flex h-7 items-center gap-1 rounded border border-slate-300 px-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"><Plus className="h-3 w-3" /> Add ingress</button>
               </div>
               {showAddRule ? (
-                <div className="mt-2 grid gap-2 rounded border border-slate-200 bg-slate-50 p-2 sm:grid-cols-2">
+                <div className="mt-2 grid gap-2 rounded border border-slate-200 bg-slate-50 p-2 @min-[480px]:grid-cols-2">
                   <label className="grid gap-1 text-xs text-slate-600">Firewall<select value={selected.firewalls.some((firewall) => firewall.id === ruleInput.firewallId) ? ruleInput.firewallId : selected.firewalls[0]?.id ?? ''} onChange={(event) => setRuleInput((current) => ({ ...current, firewallId: event.target.value }))} className="field-control">{selected.firewalls.map((firewall) => <option key={firewall.id} value={firewall.id}>{firewall.name}</option>)}</select></label>
                   <label className="grid gap-1 text-xs text-slate-600">Protocol<select value={ruleInput.protocol} onChange={(event) => setRuleInput((current) => ({ ...current, protocol: event.target.value as 'tcp' | 'udp' }))} className="field-control"><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
                   <label className="grid gap-1 text-xs text-slate-600">From port<input type="number" min={0} max={65535} value={ruleInput.fromPort} onChange={(event) => setRuleInput((current) => ({ ...current, fromPort: Number(event.target.value) }))} className="field-control" /></label>
                   <label className="grid gap-1 text-xs text-slate-600">To port<input type="number" min={0} max={65535} value={ruleInput.toPort} onChange={(event) => setRuleInput((current) => ({ ...current, toPort: Number(event.target.value) }))} className="field-control" /></label>
                   <label className="grid gap-1 text-xs text-slate-600">Source CIDR<input value={ruleInput.cidr} onChange={(event) => setRuleInput((current) => ({ ...current, cidr: event.target.value }))} className="field-control" /></label>
                   <label className="grid gap-1 text-xs text-slate-600">Description<input value={ruleInput.description ?? ''} onChange={(event) => setRuleInput((current) => ({ ...current, description: event.target.value }))} className="field-control" /></label>
-                  <div className="flex justify-end gap-1 sm:col-span-2"><button type="button" onClick={() => setShowAddRule(false)} className="h-8 rounded px-2 text-xs text-slate-600">Cancel</button><button type="button" disabled={mutating} onClick={() => void addRule()} className="h-8 rounded bg-slate-950 px-3 text-xs font-medium text-white disabled:opacity-50">Add rule</button></div>
+                  <div className="flex justify-end gap-1 @min-[480px]:col-span-2"><button type="button" onClick={() => setShowAddRule(false)} className="h-8 rounded px-2 text-xs text-slate-600">Cancel</button><button type="button" disabled={mutating} onClick={() => void addRule()} className="h-8 rounded bg-slate-950 px-3 text-xs font-medium text-white disabled:opacity-50">Add rule</button></div>
                 </div>
               ) : null}
               {detailLoading ? (
@@ -228,9 +236,9 @@ export function CloudMachinesPanel() {
                   {rules.length ? rules.map((rule) => (
                     <div key={rule.id} className="flex items-center gap-2 border-b border-slate-100 px-2 py-1.5 text-xs last:border-b-0">
                       <span className={`rounded px-1.5 py-0.5 ${rule.direction === 'ingress' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>{rule.direction}</span>
-                      <span className="font-mono text-slate-700">{rule.protocol} {rule.fromPort ?? '*'}-{rule.toPort ?? '*'}</span>
+                      <span className="font-mono text-slate-700">{formatFirewallRule(rule)}</span>
                       <span className="min-w-0 flex-1 truncate text-slate-500">{rule.source} · {rule.firewallName}</span>
-                      {rule.direction === 'ingress' ? <button type="button" aria-label="Remove firewall rule" disabled={mutating} onClick={() => void removeRule(rule)} className="rounded p-1 text-rose-600 hover:bg-rose-50 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" /></button> : null}
+                      {rule.direction === 'ingress' ? <button type="button" aria-label={`Remove ${formatFirewallRule(rule)} rule`} disabled={mutating} onClick={() => void removeRule(rule)} className="rounded p-1 text-rose-600 hover:bg-rose-50 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" /></button> : null}
                     </div>
                   )) : <p className="px-2 py-3 text-xs text-slate-500">No firewall rules returned.</p>}
                 </div>

@@ -4,14 +4,17 @@ import type { NextFunction, Request, Response } from 'express'
 import { projectStatePath } from './projectState'
 
 /**
- * Per-boot UI bearer token. Mutating HTTP routes require it; it is handed to the React UI
- * at page load and never written into any copilot workspace, MCP config, or agent context.
+ * Per-boot UI bearer token. Mutating HTTP routes and every WebSocket upgrade require it.
+ * It never travels the backend API: the Electron shell hands it to the renderer over IPC
+ * and the Vite dev server serves it from the local token file, so an agent with only HTTP
+ * access to the backend port cannot mint mutations. It is never written into any copilot
+ * workspace, MCP config, or agent context.
  *
  * This is defense-in-depth for a single-user local tool: a co-resident agent process runs
- * as the same OS user and could in principle forge browser headers, so this is not an
- * absolute boundary. Its job is to make the scoped MCP endpoint the *only* convenient path
+ * as the same OS user and could read the token file directly, so this is not an absolute
+ * boundary. Its job is to make the scoped MCP endpoint the *only* convenient path
  * a copilot has to a VM, and to stop accidental or prompt-injected `curl localhost` calls
- * from reaching mutating routes. The agent never learns the token.
+ * from reaching mutating routes.
  */
 export function generateUiToken() {
   return randomBytes(24).toString('hex')
@@ -62,7 +65,7 @@ export function uiTokenMiddleware(token: string) {
   }
 }
 
-function timingSafeEqualString(a: string, b: string) {
+export function timingSafeEqualString(a: string, b: string) {
   if (a.length !== b.length) {
     return false
   }

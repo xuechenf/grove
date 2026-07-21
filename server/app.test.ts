@@ -13,11 +13,12 @@ import { localEnvPath, saveCopilotProviderLocalEnv } from './env'
 import { resolveProjectStateReference } from './projectState'
 import { MockDriver, type MockScripter } from './drivers/mockDriver'
 import { OPENUI_OPERATOR_BRIEF_PROMPT } from '../src/openui/operatorBriefPrompt'
-import type { CommandRun, CopilotInstallState, FileNode, ServerEvent, TerminalSession, VM } from '../src/types'
+import type { CommandRun, CopilotInstallState, FileNode, ServerEvent, TerminalSession, TransferJob, VM } from '../src/types'
 import type {
   CommandExecutionRequest,
   DirectoryUploadExecutionRequest,
   DirectoryUploadResult,
+  FileTransferExecutionRequest,
   SshSessionManager,
 } from './sshSessionManager'
 
@@ -85,6 +86,35 @@ class RuntimeSampleSsh implements SshSessionManager {
 
   async listFiles(): Promise<FileNode[]> {
     return []
+  }
+}
+
+class TransferSsh extends RuntimeSampleSsh {
+  failNext = false
+
+  async transferFile(request: FileTransferExecutionRequest): Promise<TransferJob> {
+    if (this.failNext) {
+      throw new Error('SFTP read failed: No such file')
+    }
+    return {
+      id: 'job-from-ssh-layer',
+      vmId: request.vm.id,
+      direction: request.direction,
+      source: request.source,
+      target: request.target,
+      fileName: request.fileName,
+      status: 'completed',
+      progress: 100,
+      speed: '1.0 MB/s',
+    }
+  }
+}
+
+class ConnectionTrackingSsh extends RuntimeSampleSsh {
+  closedVmIds: string[] = []
+
+  closeVmConnection(vmId: string) {
+    this.closedVmIds.push(vmId)
   }
 }
 
@@ -344,6 +374,38 @@ vms:
     }
   })
 
+  it('stores agent and keyless VM auth modes without a PEM path', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'grove-'))
+    const inventoryPath = join(tempDir, 'inventory.yaml')
+
+    try {
+      process.env.GROVE_USE_FIXTURES = 'false'
+      process.env.GROVE_STATE_DIR = tempDir
+      writeFileSync(inventoryPath, 'vms: []\n', 'utf8')
+
+      const { app } = createGroveApp()
+      const agent = await request(app)
+        .post('/api/vms')
+        .send({ ipAddress: '192.168.56.20', user: 'root', port: 22, pemPath: '', useAgent: true })
+        .expect(201)
+      expect(agent.body.connection.keyLabel).toBe('ssh-agent')
+
+      const keyless = await request(app)
+        .post('/api/vms')
+        .send({ ipAddress: '192.168.56.21', user: 'root', port: 22, pemPath: '', useAgent: false })
+        .expect(201)
+      expect(keyless.body.connection.keyLabel).toBe('not configured')
+
+      const rejected = await request(app)
+        .post('/api/vms')
+        .send({ ipAddress: '192.168.56.22', user: 'root', port: 22, pemPath: '' })
+        .expect(400)
+      expect(rejected.body).toEqual({ error: 'Enter a PEM file path.' })
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   it('returns readable JSON errors for invalid VM connection profiles', async () => {
     const { app } = createGroveApp()
     const response = await request(app)
@@ -432,6 +494,93 @@ vms:
 
     expect(response.body.commandRun.command).toBe('sudo reboot')
     expect(response.body.vm.activity[0].title).toBe('Reboot requested')
+  })
+
+  it('rejects transfer jobs for the unsupported copy direction', async () => {
+    const { app } = createGroveApp()
+    const response = await request(app)
+      .post('/api/transfers')
+      .send({
+        vmId: 'vm-orchid',
+        direction: 'copy',
+        source: '/srv/a',
+        target: '/srv/b',
+        fileName: 'a',
+      })
+      .expect(400)
+
+    expect(response.body.error).toBeTruthy()
+  })
+
+  it('records a failed transfer job instead of dropping it', async () => {
+    const ssh = new TransferSsh()
+    ssh.failNext = true
+    const { app, store } = createGroveApp(new GroveStore(ssh))
+    const events: string[] = []
+    store.onEvent((event) => events.push(event.type))
+
+    const response = await request(app)
+      .post('/api/transfers')
+      .send({
+        vmId: 'vm-orchid',
+        direction: 'download',
+        source: '/remote/missing.bin',
+        target: 'C:\\tmp\\missing.bin',
+        fileName: 'missing.bin',
+      })
+      .expect(400)
+
+    expect(response.body.error).toContain('SFTP read failed')
+    const jobs = store.snapshot().transfers.filter((job) => job.fileName === 'missing.bin')
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0].status).toBe('failed')
+    expect(jobs[0].speed).toContain('SFTP read failed')
+    // One event for the in-progress record, one for the failure.
+    expect(events.filter((type) => type === 'transfer.updated')).toHaveLength(2)
+    expect(store.getVm('vm-orchid')!.activity.some((entry) => entry.title === 'Download failed')).toBe(true)
+  })
+
+  it('completes a real transfer with the job id published up front', async () => {
+    const ssh = new TransferSsh()
+    const { app, store } = createGroveApp(new GroveStore(ssh))
+
+    const response = await request(app)
+      .post('/api/transfers')
+      .send({
+        vmId: 'vm-orchid',
+        direction: 'upload',
+        source: 'C:\\workspace\\compose.yml',
+        target: '/srv/build/compose.yml',
+        fileName: 'compose.yml',
+      })
+      .expect(201)
+
+    expect(response.body.status).toBe('completed')
+    expect(response.body.id).not.toBe('job-from-ssh-layer')
+    const jobs = store.snapshot().transfers.filter((job) => job.fileName === 'compose.yml')
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0].id).toBe(response.body.id)
+    expect(jobs[0].status).toBe('completed')
+  })
+
+  it('drops the cached SSH connection only when the connection profile changes', () => {
+    const ssh = new ConnectionTrackingSsh()
+    const { store } = createGroveApp(new GroveStore(ssh))
+
+    store.updateVm('vm-orchid', { ipAddress: '10.66.0.8', pemPath: '/keys/orchid.pem', user: 'root', port: 22 })
+    expect(ssh.closedVmIds).toEqual(['vm-orchid'])
+
+    // A metadata-only update (same host/port/user/key) must not bounce the connection.
+    store.updateVm('vm-orchid', { ipAddress: '10.66.0.8', pemPath: '/keys/orchid.pem', user: 'root', port: 22, name: 'orchid-renamed' })
+    expect(ssh.closedVmIds).toEqual(['vm-orchid'])
+  })
+
+  it('drops the cached SSH connection when the VM is deleted', () => {
+    const ssh = new ConnectionTrackingSsh()
+    const { store } = createGroveApp(new GroveStore(ssh))
+
+    store.deleteVm('vm-orchid')
+    expect(ssh.closedVmIds).toEqual(['vm-orchid'])
   })
 
   it('creates transfer jobs with conflict metadata', async () => {

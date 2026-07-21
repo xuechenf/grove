@@ -11,6 +11,16 @@ const devServerUrl = process.env.VITE_DEV_SERVER_URL
 let serverHandle: GroveServerHandle | undefined
 let mainWindow: BrowserWindow | undefined
 
+ipcMain.handle('grove:ui-token', (event) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) {
+    throw new Error('The UI token is not available for this window.')
+  }
+  // The packaged renderer cannot read the token from the backend API (it is never served
+  // there); the main process hands it over directly. In dev, serverHandle is undefined and
+  // the renderer falls back to the Vite dev middleware.
+  return serverHandle?.uiToken ?? null
+})
+
 ipcMain.handle('grove:choose-local-directory', async (event, currentPath: unknown) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) {
     throw new Error('The local folder picker is not available for this window.')

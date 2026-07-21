@@ -263,6 +263,17 @@ function upsertById<T extends { id: string }>(items: T[], nextItem: T) {
     : [nextItem, ...items]
 }
 
+/**
+ * Like upsertById but never adds: late arrivals for an id the user already deleted (an
+ * in-flight telemetry fetch, a vm.updated emitted before the delete) must not resurrect
+ * the entry. The snapshot stays the source of truth for genuine additions.
+ */
+function updateById<T extends { id: string }>(items: T[], nextItem: T) {
+  return items.some((item) => item.id === nextItem.id)
+    ? items.map((item) => (item.id === nextItem.id ? nextItem : item))
+    : items
+}
+
 function appendOrReplaceById<T extends { id: string }>(items: T[], nextItem: T) {
   return items.some((item) => item.id === nextItem.id)
     ? items.map((item) => (item.id === nextItem.id ? nextItem : item))
@@ -311,10 +322,14 @@ function localVmIdFromInput(input: VmConnectionInput, currentVms: VM[]) {
 
 function localVmFromInput(input: VmConnectionInput, currentVms: VM[], existing?: VM): VM {
   const ipAddress = input.ipAddress.trim()
+  const pemPath = input.pemPath.trim()
+  const useAgent = input.useAgent === true && !pemPath
+  // Mirrors server vmFromConfig so the offline fallback labels auth the same way.
+  const keyLabel = pemPath || (useAgent ? 'ssh-agent' : 'not configured')
   const base = existing ?? fixtureVms[0]
   const activity = makeActivity(
     existing ? 'Connection profile updated' : 'VM added',
-    `${cleanText(input.user) ?? existing?.connection.user ?? 'root'}@${ipAddress}:${input.port} using ${input.pemPath.trim()}`,
+    `${cleanText(input.user) ?? existing?.connection.user ?? 'root'}@${ipAddress}:${input.port} using ${keyLabel}`,
     'success',
   )
 
@@ -337,8 +352,8 @@ function localVmFromInput(input: VmConnectionInput, currentVms: VM[], existing?:
       host: ipAddress,
       user: cleanText(input.user) ?? existing?.connection.user ?? 'root',
       port: input.port,
-      keyLabel: input.pemPath.trim(),
-      keyStatus: 'present',
+      keyLabel,
+      keyStatus: pemPath || useAgent ? 'present' : 'unknown',
       lastConnected: existing?.connection.lastConnected ?? 'not connected',
       testStatus: 'idle',
     },
@@ -548,6 +563,9 @@ function App() {
           setProviderStatus(status)
         }
       })
+      .catch(() => {
+        // Keep the previous provider status; it refreshes once the backend is reachable.
+      })
 
     getTerraformStatus()
       .then((status) => {
@@ -555,9 +573,6 @@ function App() {
       })
       .catch(() => {
         if (mounted) setTerraformStatus({ available: false, detail: 'Terraform status is unavailable.' })
-      })
-      .catch(() => {
-        // Provider status remains available once the backend comes online.
       })
 
     if (typeof WebSocket === 'undefined') {
@@ -582,6 +597,11 @@ function App() {
           setPlans(event.payload.plans ?? [])
           setCopilotRuntime(event.payload.runtime ?? { driver: 'mock', state: 'disabled' })
           setCopilotInstall(event.payload.install ?? { status: 'idle', log: '' })
+          // A snapshot means the socket (re)connected to a fresh backend view, so any
+          // busy flags from before the gap are stale (the terminal progress event was
+          // missed). A genuinely running turn re-marks itself on its next progress event.
+          setCopilotProgress([])
+          setCopilotBusyByScope({})
           setSelectedVmId((current) => selectAvailableVm(current, event.payload.vms))
           setSelectedApplicationId((current) =>
             event.payload.applications?.some((application) => application.id === current)
@@ -592,7 +612,7 @@ function App() {
         }
 
         if (event.type === 'vm.updated') {
-          setVms((current) => upsertById(current, event.payload))
+          setVms((current) => updateById(current, event.payload))
           return
         }
 
@@ -716,7 +736,7 @@ function App() {
     try {
       const telemetry = await getVmOverview(vmId, 1)
       setVmTelemetryById((current) => ({ ...current, [vmId]: telemetry }))
-      setVms((current) => upsertById(current, telemetry.vm))
+      setVms((current) => updateById(current, telemetry.vm))
     } catch (cause) {
       setVmTelemetryById((current) => {
         const existing = current[vmId]
@@ -989,7 +1009,19 @@ function App() {
           await deleteVm(selectedVm.id)
           setPendingAction(null)
           return
-        } catch {
+        } catch (error) {
+          if (!isApiUnavailableError(error)) {
+            addActivity(
+              selectedVm.id,
+              makeActivity(
+                'Delete failed',
+                error instanceof Error ? error.message : 'The VM could not be deleted.',
+                'critical',
+              ),
+            )
+            setPendingAction(null)
+            return
+          }
           // Fall back to local state so the UI remains usable during backend restarts.
         }
       }
@@ -1009,7 +1041,19 @@ function App() {
         setVms((current) => upsertById(current, result.vm))
         setPendingAction(null)
         return
-      } catch {
+      } catch (error) {
+        if (!isApiUnavailableError(error)) {
+          addActivity(
+            selectedVm.id,
+            makeActivity(
+              `${action.label} failed`,
+              error instanceof Error ? error.message : 'The reboot request failed.',
+              'critical',
+            ),
+          )
+          setPendingAction(null)
+          return
+        }
         // Fall back to local state so the UI remains usable during backend restarts.
       }
     }
@@ -1079,7 +1123,27 @@ function App() {
           setLocalRefreshTick((current) => current + 1)
         }
         return
-      } catch {
+      } catch (error) {
+        if (!isApiUnavailableError(error)) {
+          // A reachable backend rejected the transfer (and records the failed job itself):
+          // show the real failure, never a fabricated in-progress job.
+          const detail = error instanceof Error ? error.message : 'Transfer failed.'
+          const failedJob: TransferJob = {
+            id: nextTransferId(),
+            vmId: selectedVm.id,
+            direction,
+            source: file.path,
+            target,
+            fileName: file.name,
+            status: 'failed',
+            progress: 0,
+            speed: detail,
+            conflict: conflictMode,
+          }
+          setTransfers((current) => [failedJob, ...current])
+          addActivity(selectedVm.id, makeActivity(`Transfer ${direction} failed`, detail, 'critical'))
+          return
+        }
         // Fall back to local transfer state if the backend is unavailable.
       }
     }
@@ -1278,7 +1342,24 @@ function App() {
         const vm = await refreshVm(selectedVm.id)
         setVms((current) => upsertById(current, vm))
         return
-      } catch {
+      } catch (error) {
+        if (!isApiUnavailableError(error)) {
+          // A reachable backend that reports failure (bad key, refused port, ...) must
+          // surface as a failed test, never as the optimistic local guess below.
+          const detail = error instanceof Error ? error.message : 'The connection test failed.'
+          setVms((current) =>
+            current.map((vm) =>
+              vm.id === selectedVm.id
+                ? {
+                    ...vm,
+                    connection: { ...vm.connection, testStatus: 'failed' },
+                    activity: [makeActivity('SSH test failed', detail, 'critical'), ...vm.activity],
+                  }
+                : vm,
+            ),
+          )
+          return
+        }
         // Fall back to local state when the backend is restarting.
       }
     }
@@ -1320,6 +1401,9 @@ function App() {
         const response = await sendCopilotMessage({ scope, message: content, referenceHistory: options?.referenceHistory })
         setMessages((current) => response.messages.reduce((items, message) => appendOrReplaceById(items, message), current))
         setProposals((current) => response.proposals.reduce((items, proposal) => upsertById(items, proposal), current))
+        // The turn is done: clear busy here too, in case the terminal progress event was
+        // lost to a socket reconnect while the POST was still in flight.
+        setCopilotBusyByScope((current) => ({ ...current, [scope]: false }))
         return
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Copilot request failed.'
@@ -1605,7 +1689,23 @@ function App() {
           }),
         )
         return
-      } catch {
+      } catch (error) {
+        if (!isApiUnavailableError(error)) {
+          // The decision never reached the backend: undo the optimistic mark so the card
+          // stays actionable instead of pretending the proposal executed.
+          setProposals((current) =>
+            current.map((item) => (item.id === proposalId ? { ...item, decision: undefined } : item)),
+          )
+          addActivity(
+            proposal.vmId,
+            makeActivity(
+              `${proposal.title} failed`,
+              error instanceof Error ? error.message : 'The copilot action could not be decided.',
+              'critical',
+            ),
+          )
+          return
+        }
         // Fall back to local state if the backend is unavailable.
       }
     }

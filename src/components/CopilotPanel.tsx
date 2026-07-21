@@ -463,9 +463,15 @@ export function CopilotPanel({
       return
     }
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onCancel()
+      if (event.key !== 'Escape' || event.defaultPrevented) {
+        return
       }
+      // Escape pressed inside an open overlay dismisses that overlay, not the turn —
+      // Radix dialogs trap focus, so the key target sits inside role="dialog".
+      if (event.target instanceof Element && event.target.closest('[role="dialog"]')) {
+        return
+      }
+      onCancel()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)

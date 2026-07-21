@@ -24,7 +24,7 @@ import { GroveStore } from './store'
 
 const transferRequestSchema = z.object({
   vmId: z.string(),
-  direction: z.enum(['upload', 'download', 'copy']),
+  direction: z.enum(['upload', 'download']),
   source: z.string(),
   target: z.string(),
   fileName: z.string(),
@@ -169,16 +169,24 @@ const localPathSchema = z.object({
   path: z.string().min(1),
 })
 
-const vmConnectionSchema = z.object({
-  name: z.string().trim().min(1).optional(),
-  ipAddress: z.string().trim().refine((value) => isIP(value) > 0, {
-    message: 'Enter a valid IP address.',
-  }),
-  user: z.string().trim().min(1).optional(),
-  port: z.coerce.number().int().min(1).max(65535),
-  pemPath: z.string().trim().min(1),
-  os: z.string().trim().min(1).optional(),
-})
+const vmConnectionSchema = z
+  .object({
+    name: z.string().trim().min(1).optional(),
+    ipAddress: z.string().trim().refine((value) => isIP(value) > 0, {
+      message: 'Enter a valid IP address.',
+    }),
+    user: z.string().trim().min(1).optional(),
+    port: z.coerce.number().int().min(1).max(65535),
+    pemPath: z.string().trim(),
+    // Auth-mode declaration for VMs without a PEM file: true = ssh-agent, false = keyless.
+    useAgent: z.boolean().optional(),
+    os: z.string().trim().min(1).optional(),
+  })
+  // A key file is required unless the caller explicitly declares the auth mode instead.
+  .refine((value) => value.pemPath.length > 0 || value.useAgent !== undefined, {
+    message: 'Enter a PEM file path.',
+    path: ['pemPath'],
+  })
 
 type AsyncHandler = (request: Request, response: Response) => Promise<void>
 type SyncHandler = (request: Request, response: Response) => void
@@ -255,7 +263,10 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
   })
 
   app.get('/api/bootstrap', (_request, response) => {
-    response.json({ token: options.uiToken ?? null, runtime: store.copilotRuntimeStatus() })
+    // Deliberately no token here: the per-boot UI token is delivered out of band (Electron
+    // IPC bridge, or the Vite dev middleware reading the local token file), so the HTTP API
+    // alone never discloses it. See server/apiToken.ts.
+    response.json({ runtime: store.copilotRuntimeStatus() })
   })
 
   app.get(

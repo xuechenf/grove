@@ -20,6 +20,8 @@ interface FormState {
   user: string
   port: string
   pemPath: string
+  // 'pem' requires a key file; 'agent' (ssh-agent) and 'none' (not configured) save without one.
+  authMode: 'pem' | 'agent' | 'none'
   os: string
 }
 
@@ -29,6 +31,7 @@ const emptyForm: FormState = {
   user: 'root',
   port: '22',
   pemPath: '',
+  authMode: 'pem',
   os: 'Linux',
 }
 
@@ -37,14 +40,15 @@ function formFromVm(vm: VM | undefined): FormState {
     return emptyForm
   }
 
-  const keyLabel = ['ssh-agent', 'not configured'].includes(vm.connection.keyLabel) ? '' : vm.connection.keyLabel
+  const keyless = ['ssh-agent', 'not configured'].includes(vm.connection.keyLabel)
 
   return {
     name: vm.name,
     ipAddress: vm.ipAddress,
     user: vm.connection.user,
     port: String(vm.connection.port),
-    pemPath: keyLabel,
+    pemPath: keyless ? '' : vm.connection.keyLabel,
+    authMode: vm.connection.keyLabel === 'ssh-agent' ? 'agent' : keyless ? 'none' : 'pem',
     os: vm.os,
   }
 }
@@ -75,7 +79,12 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
   const [error, setError] = useState<string | undefined>()
 
   function updateField(field: keyof FormState, value: string) {
-    setForm((current) => ({ ...current, [field]: value }))
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+      ...(field === 'pemPath' && value.trim() ? { authMode: 'pem' as const } : {}),
+      ...(field === 'authMode' && value !== 'pem' ? { pemPath: '' } : {}),
+    }))
   }
 
   async function saveVm(event: FormEvent<HTMLFormElement>) {
@@ -94,7 +103,7 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
       return
     }
 
-    if (!pemPath) {
+    if (!pemPath && form.authMode === 'pem') {
       setError('Enter a PEM file path.')
       return
     }
@@ -108,6 +117,9 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
         user: form.user.trim() || undefined,
         port,
         pemPath,
+        // Declare the auth mode whenever no PEM file is involved (true = ssh-agent,
+        // false = keyless); the API requires either a key path or this declaration.
+        useAgent: pemPath ? undefined : form.authMode === 'agent',
         os: form.os.trim() || undefined,
       })
       onOpenChange(false)
@@ -129,7 +141,7 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
                 {mode === 'add' ? 'Add VM' : 'Modify VM'}
               </Dialog.Title>
               <Dialog.Description className="mt-1 text-sm text-slate-500">
-                Store the SSH endpoint and PEM file path in the local inventory.
+                Store the SSH endpoint and authentication mode in the local inventory.
               </Dialog.Description>
             </div>
             <IconButton label="Close VM editor" onClick={() => onOpenChange(false)}>
@@ -161,14 +173,27 @@ export function VmEditorDialog({ open, mode, vm, onOpenChange, onSave }: VmEdito
               </Field>
             </div>
 
-            <Field label="PEM file path" required>
-              <input
-                value={form.pemPath}
-                onChange={(event) => updateField('pemPath', event.target.value)}
-                placeholder="keys/example.pem"
-                className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
-              />
-            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="SSH authentication" required>
+                <select
+                  value={form.authMode}
+                  onChange={(event) => updateField('authMode', event.target.value)}
+                  className="h-9 rounded border border-slate-300 bg-white px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
+                >
+                  <option value="pem">Private key file</option>
+                  <option value="agent">SSH agent</option>
+                  <option value="none">Not configured</option>
+                </select>
+              </Field>
+              <Field label="PEM file path" required={form.authMode === 'pem'}>
+                <input
+                  value={form.pemPath}
+                  onChange={(event) => updateField('pemPath', event.target.value)}
+                  placeholder="keys/example.pem"
+                  className="h-9 rounded border border-slate-300 px-3 text-sm font-normal text-slate-900 outline-none focus:border-slate-500"
+                />
+              </Field>
+            </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
               <Field label="Display name">

@@ -1,7 +1,8 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import type { VmConfig } from '../src/types'
 import { projectStateDir } from './projectState'
+import { atomicWriteFileSync, quarantineCorruptFile } from './stateFiles'
 
 export interface V2MigrationRecord {
   schemaVersion: 2
@@ -29,7 +30,12 @@ export function ensureV2StateMigration(vmConfigs: VmConfig[], options: V2Migrati
   const migrationDirectory = join(stateDirectory, 'migrations')
   const markerPath = join(migrationDirectory, 'v2.json')
   if (existsSync(markerPath)) {
-    return JSON.parse(readFileSync(markerPath, 'utf8')) as V2MigrationRecord
+    try {
+      return JSON.parse(readFileSync(markerPath, 'utf8')) as V2MigrationRecord
+    } catch {
+      // A corrupt marker must not kill startup: quarantine it and rebuild the snapshot below.
+      quarantineCorruptFile(markerPath)
+    }
   }
 
   const createdAt = new Date().toISOString()
@@ -43,7 +49,17 @@ export function ensureV2StateMigration(vmConfigs: VmConfig[], options: V2Migrati
     if (!existsSync(sourcePath)) {
       continue
     }
-    copyFileSync(sourcePath, join(backupDirectory, basename(sourcePath)))
+    const backupPath = join(backupDirectory, basename(sourcePath))
+    copyFileSync(sourcePath, backupPath)
+    if (fileName === '.env.local') {
+      // The backup holds the copilot API key: keep it owner-only even if the source
+      // was written before permissions were tightened.
+      try {
+        chmodSync(backupPath, 0o600)
+      } catch {
+        // Windows applies the user profile ACL; chmod is best-effort elsewhere.
+      }
+    }
     backedUpFiles.push(fileName)
   }
 
@@ -55,6 +71,6 @@ export function ensureV2StateMigration(vmConfigs: VmConfig[], options: V2Migrati
     backedUpFiles,
   }
   mkdirSync(migrationDirectory, { recursive: true })
-  writeFileSync(markerPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8')
+  atomicWriteFileSync(markerPath, `${JSON.stringify(record, null, 2)}\n`)
   return record
 }

@@ -1,4 +1,4 @@
-import type { DangerLevel, TransferStatus, VMHealth } from '../types'
+import type { CloudFirewallRule, DangerLevel, TransferStatus, VMHealth } from '../types'
 
 export function formatBytes(value: number) {
   if (value === 0) {
@@ -15,6 +15,29 @@ export function formatBytes(value: number) {
   }
 
   return `${size >= 10 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
+}
+
+/** Human-readable cloud firewall protocol and port range. */
+export function formatFirewallRule(
+  rule: Pick<CloudFirewallRule, 'protocol' | 'fromPort' | 'toPort'>,
+) {
+  const protocol = rule.protocol.trim().toLowerCase()
+  if (protocol === '-1' || protocol === 'all') {
+    return 'all traffic'
+  }
+
+  const fromPort = rule.fromPort
+  const toPort = rule.toPort
+  if (
+    fromPort === undefined ||
+    toPort === undefined ||
+    fromPort < 0 ||
+    toPort < 0
+  ) {
+    return `${protocol || 'all'} all ports`
+  }
+
+  return `${protocol} ${fromPort}-${toPort}`
 }
 
 export function cx(...classes: Array<string | false | null | undefined>) {

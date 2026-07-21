@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { dirname, posix } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { Client, type ClientChannel, type ConnectConfig, type SFTPWrapper } from 'ssh2'
@@ -24,6 +24,8 @@ export interface SshSessionManager {
   uploadDirectory?(request: DirectoryUploadExecutionRequest): Promise<DirectoryUploadResult>
   /** Best-effort: establish the VM's connection ahead of the first command. Never rejects. */
   warmConnection?(vm: VM): Promise<void>
+  /** Drop the cached connection for a VM whose connection profile changed or that was deleted. */
+  closeVmConnection?(vmId: string): void
 }
 
 export interface TerminalShellOptions {
@@ -314,6 +316,10 @@ export class MockSshSessionManager implements SshSessionManager {
     return files.filter((file) => file.path.startsWith(path === '/' ? '/' : path) || path === '/remote/path')
   }
 
+  closeVmConnection(): void {
+    // The mock never opens real connections, so there is nothing to drop.
+  }
+
   async uploadDirectory({ sourcePath }: DirectoryUploadExecutionRequest): Promise<DirectoryUploadResult> {
     return { fileCount: collectLocalProjectFiles(sourcePath).length }
   }
@@ -460,14 +466,24 @@ export class RealSshSessionManager implements SshSessionManager {
 
         let stdout = ''
         let stderr = ''
-        let exitCode = 0
+        // ssh2 emits 'exit' before 'close' when the server reports how the command ended
+        // (code null when the remote was killed by a signal). A 'close' without an exit
+        // status means the connection dropped mid-command: that is NOT a successful run.
+        let exitCode: number | undefined
+        let exitSignal: string | undefined
+        let exitStatusReceived = false
         // Decode per-stream, not per-chunk: SSH packets split multi-byte UTF-8 characters
         // (systemctl's `●` etc.) across chunk boundaries, which per-chunk toString() turns
         // into replacement characters.
         const stdoutDecoder = new StringDecoder('utf8')
         const stderrDecoder = new StringDecoder('utf8')
         stream
-          .on('close', (code?: number) => {
+          .on('exit', (code: number | null, signal?: string) => {
+            exitStatusReceived = true
+            exitCode = code === null ? undefined : code
+            exitSignal = signal
+          })
+          .on('close', (code?: number | null) => {
             clearTimeout(timer)
             if (settled) {
               return
@@ -475,7 +491,28 @@ export class RealSshSessionManager implements SshSessionManager {
             settled = true
             stdout += stdoutDecoder.end()
             stderr += stderrDecoder.end()
-            exitCode = code ?? exitCode
+            if (typeof code === 'number') {
+              exitCode = code
+            }
+            if (!exitStatusReceived || exitCode === undefined) {
+              const message = exitStatusReceived
+                ? `Command was terminated by ${exitSignal ? `signal ${exitSignal}` : 'a signal'} before it could finish.`
+                : 'Connection closed before the command finished.'
+              resolveCommand({
+                id: `cmd-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                vmId: vm.id,
+                actor,
+                command,
+                status: 'failed',
+                startedAt,
+                completedAt: nowIso(),
+                stdout,
+                stderr: stderr || message,
+                summary: message,
+                mutating,
+              })
+              return
+            }
             const outputSummary = command.includes('__GROVE_SHADOWSOCKS_INSTALLED_DIAGNOSTIC__')
               ? 'Shadowsocks installation diagnostic collected over SSH.'
               : command.includes('__GROVE_SHADOWSOCKS_DIAGNOSTIC__')
@@ -602,8 +639,30 @@ export class RealSshSessionManager implements SshSessionManager {
         await new Promise<void>((resolveTransfer, reject) => {
           const readStream = sftp.createReadStream(remoteSource)
           const writeStream = createWriteStream(target)
-          readStream.on('error', reject)
-          writeStream.on('error', reject)
+          // A failed download must not leak the other stream's fd, nor leave a partial
+          // (often 0-byte) file behind that looks like a completed download. The unlink
+          // runs on 'close' so the write fd is already released (Windows rejects
+          // unlinking an open file).
+          let failed = false
+          readStream.on('error', (error: Error) => {
+            failed = true
+            writeStream.destroy()
+            reject(error)
+          })
+          writeStream.on('error', (error: Error) => {
+            failed = true
+            readStream.destroy()
+            reject(error)
+          })
+          writeStream.on('close', () => {
+            if (failed) {
+              try {
+                rmSync(target, { force: true })
+              } catch {
+                // Cleanup is best-effort; the transfer error is already propagating.
+              }
+            }
+          })
           writeStream.on('finish', () => resolveTransfer())
           readStream.pipe(writeStream)
         })
@@ -676,6 +735,11 @@ export class RealSshSessionManager implements SshSessionManager {
         resolveSftp(sftp)
       })
     })
+  }
+
+  /** Drop the cached connection for a VM whose profile changed or that was deleted. */
+  closeVmConnection(vmId: string): void {
+    void this.resetClient(vmId)
   }
 
   /** Establish (or reuse) the VM's connection ahead of time so the first command skips the handshake. */

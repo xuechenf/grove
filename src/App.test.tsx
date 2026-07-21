@@ -1,5 +1,6 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import * as Dialog from '@radix-ui/react-dialog'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { CopilotPanel } from './components/CopilotPanel'
@@ -66,7 +67,7 @@ describe('Grove VM console', () => {
 
   it('uses the desktop folder picker when the Electron bridge is available', async () => {
     const chooseLocalDirectory = vi.fn().mockResolvedValue('D:\\projects\\grove')
-    window.groveDesktop = { chooseLocalDirectory }
+    window.groveDesktop = { chooseLocalDirectory, getUiToken: vi.fn().mockResolvedValue(null) }
     const { user } = setup()
     await openOrchid(user)
     await user.click(screen.getByRole('tab', { name: /Files/i }))
@@ -664,6 +665,62 @@ describe('Grove VM console', () => {
     await user.type(screen.getByLabelText('Copilot message'), 'checked ask')
     await user.click(screen.getByRole('button', { name: 'Send copilot message' }))
     expect(onSendMessage).toHaveBeenLastCalledWith('checked ask', { referenceHistory: true })
+  })
+
+  it('Escape inside an open dialog dismisses the dialog without aborting the copilot turn', () => {
+    const onCancel = vi.fn()
+    render(
+      <>
+        <Dialog.Root open>
+          <Dialog.Portal>
+            <Dialog.Content aria-label="Confirm action">
+              <Dialog.Title>Confirm action</Dialog.Title>
+              <button type="button">Inside button</button>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+        <CopilotPanel
+          scope="fleet"
+          scopeLabel="All VMs"
+          runtime={{ driver: 'mock', state: 'ready' }}
+          messages={[]}
+          toolCalls={[]}
+          plans={[]}
+          progress={[]}
+          proposals={[]}
+          isBusy
+          onSendMessage={() => undefined}
+          onDecideProposal={() => undefined}
+          onCancel={onCancel}
+        />
+      </>,
+    )
+
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Inside button' }), { key: 'Escape' })
+    expect(onCancel).not.toHaveBeenCalled()
+  })
+
+  it('Escape in the composer still aborts the copilot turn', () => {
+    const onCancel = vi.fn()
+    render(
+      <CopilotPanel
+        scope="fleet"
+        scopeLabel="All VMs"
+        runtime={{ driver: 'mock', state: 'ready' }}
+        messages={[]}
+        toolCalls={[]}
+        plans={[]}
+        progress={[]}
+        proposals={[]}
+        isBusy
+        onSendMessage={() => undefined}
+        onDecideProposal={() => undefined}
+        onCancel={onCancel}
+      />,
+    )
+
+    fireEvent.keyDown(screen.getByLabelText('Copilot message'), { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 
   it('reveals the full SSH console dump behind a step\'s console-log toggle', async () => {

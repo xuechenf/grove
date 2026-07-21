@@ -41,7 +41,10 @@ export interface VmConnectionInput {
   ipAddress: string
   user?: string
   port: number
+  /** PEM key file path; may be empty when the VM authenticates via ssh-agent or keyless. */
   pemPath: string
+  /** Explicit auth-mode declaration: true = ssh-agent, false = no key material. */
+  useAgent?: boolean
   os?: string
 }
 
@@ -481,6 +484,7 @@ export interface GroveSettings {
   workspacePath: string
   workspaceStatus: 'healthy' | 'missing' | 'unwritable' | 'migrating'
   credentialProfiles: CredentialProfile[]
+  legacyAppRunnerMigrationCompletedAt?: string
 }
 
 export interface ProcessInfo {

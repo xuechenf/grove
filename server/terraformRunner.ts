@@ -30,6 +30,9 @@ interface CommandResult {
   stderr: string
 }
 
+/** Applies to every terraform invocation (init/plan/apply/...); overridable for tests. */
+const DEFAULT_TERRAFORM_TIMEOUT_MS = 30 * 60 * 1000
+
 function digestFile(path: string) {
   return `sha256:${createHash('sha256').update(readFileSync(path)).digest('hex')}`
 }
@@ -62,9 +65,13 @@ function terraformOutputs(value: unknown) {
 export class TerraformRunner implements TerraformExecutor {
   private executable?: string
   private runtimeStatus: TerraformRuntimeStatus
+  private readonly timeoutMs: number
 
-  constructor(executable?: string) {
+  constructor(executable?: string, options: { timeoutMs?: number } = {}) {
     this.executable = executable ?? this.resolveExecutable()
+    // A hung terraform child (provider API stall, dead network) must not run forever: it
+    // would hold InfrastructureManager's per-environment lock until the process restarts.
+    this.timeoutMs = options.timeoutMs ?? (Number(envValue('GROVE_TERRAFORM_TIMEOUT_MS')) || DEFAULT_TERRAFORM_TIMEOUT_MS)
     this.runtimeStatus = this.inspectStatus()
   }
 
@@ -233,6 +240,10 @@ export class TerraformRunner implements TerraformExecutor {
           TF_INPUT: '0',
         },
       })
+      const timer = setTimeout(() => {
+        child.kill()
+        reject(new Error(`Terraform ${args[0]} timed out after ${Math.round(this.timeoutMs / 1000)}s and was stopped.`))
+      }, this.timeoutMs)
       let stdout = ''
       let stderr = ''
       child.stdout.setEncoding('utf8')
@@ -243,8 +254,12 @@ export class TerraformRunner implements TerraformExecutor {
       child.stderr.on('data', (chunk: string) => {
         stderr += chunk
       })
-      child.once('error', reject)
+      child.once('error', (error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
       child.once('close', (code) => {
+        clearTimeout(timer)
         if (code === 0) {
           resolve({ stdout, stderr })
         } else {

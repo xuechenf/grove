@@ -230,7 +230,9 @@ export function ApplicationsWorkspace({
       </div>
 
       {deployOpen ? <DeployDialog
-        key={`${application.id}-${application.versions[0]?.id ?? 'none'}`}
+        // Key by application only: the version list is read reactively from props, and a
+        // build completing mid-dialog must not remount and wipe the user's selections.
+        key={application.id}
         open={deployOpen}
         application={application}
         vms={vms}
@@ -640,7 +642,12 @@ function sourceLabel(application: GroveApplication) {
 }
 
 function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+  const parsed = new Date(value)
+  // A malformed timestamp degrades to the raw value; Intl.DateTimeFormat.format would
+  // throw a RangeError and take the whole workspace render down with it.
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(parsed)
 }
 
 function formatRelative(value: string) {

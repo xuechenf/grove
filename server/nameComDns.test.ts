@@ -98,4 +98,56 @@ describe('NameComDnsManager', () => {
       .rejects.toThrow('not owned by this Grove environment')
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
+
+  it('follows pagination when matching the domain and scanning for conflicting records', async () => {
+    const requested: string[] = []
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      requested.push(url)
+      if (url.endsWith('/domains?page=1&perPage=1000')) {
+        return json({ domains: [{ domainName: 'other-example.org' }], nextPage: 2, lastPage: 2 })
+      }
+      if (url.endsWith('/domains?page=2&perPage=1000')) {
+        return json({ domains: [{ domainName: 'example.com' }], lastPage: 2 })
+      }
+      if (url.endsWith('/domains/example.com/records?page=1&perPage=1000')) {
+        return json({ records: [], nextPage: 2, lastPage: 2 })
+      }
+      if (url.endsWith('/domains/example.com/records?page=2&perPage=1000')) {
+        return json({ records: [{ id: 9, host: 'api', type: 'A', answer: '192.0.2.10' }], lastPage: 2 })
+      }
+      return json({ error: 'unexpected request' }, 500)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    // The conflicting A record only exists on page 2: page-1-only scanning would miss it
+    // and create a duplicate.
+    await expect(new NameComDnsManager(credentials()).reconcile(environment(), '203.0.113.45'))
+      .rejects.toThrow('not owned by this Grove environment')
+    expect(requested).toContain('https://api.name.test/v4/domains?page=2&perPage=1000')
+    expect(requested).toContain('https://api.name.test/v4/domains/example.com/records?page=2&perPage=1000')
+  })
+
+  it('removes a record whose domain sits beyond page 1', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      calls.push(`${init?.method ?? 'GET'} ${url}`)
+      if (url.endsWith('/domains?page=1&perPage=1000')) {
+        return json({ domains: [{ domainName: 'unrelated.org' }], nextPage: 2, lastPage: 2 })
+      }
+      if (url.endsWith('/domains?page=2&perPage=1000')) {
+        return json({ domains: [{ domainName: 'example.com' }], lastPage: 2 })
+      }
+      if (url.endsWith('/domains/example.com/records/42') && init?.method === 'DELETE') {
+        return new Response(null, { status: 204 })
+      }
+      return json({ error: 'unexpected request' }, 500)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new NameComDnsManager(credentials()).remove(environment({ dnsStatus: 'ready', dnsRecordId: '42' }))
+
+    expect(calls).toContain('DELETE https://api.name.test/v4/domains/example.com/records/42')
+  })
 })

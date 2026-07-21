@@ -8,7 +8,6 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-  writeFileSync,
 } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { parse, stringify } from 'yaml'
@@ -23,6 +22,7 @@ import type {
   GroveSettings,
 } from '../src/types'
 import { projectStatePath } from './projectState'
+import { atomicWriteFileSync, quarantineCorruptFile } from './stateFiles'
 
 const applicationSourceSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('local'), path: z.string().min(1) }),
@@ -181,6 +181,8 @@ const settingsSchema = z.object({
   workspacePath: z.string().min(1),
   workspaceStatus: z.enum(['healthy', 'missing', 'unwritable', 'migrating']),
   credentialProfiles: z.array(credentialProfileSchema),
+  /** Set once the legacy AppRunner import has run; prevents re-importing on every boot. */
+  legacyAppRunnerMigrationCompletedAt: z.string().optional(),
 })
 
 export interface ApplicationWorkspaceOptions {
@@ -193,7 +195,7 @@ function nowIso() {
   return new Date().toISOString()
 }
 
-function slugify(value: string) {
+export function slugify(value: string) {
   return value
     .trim()
     .toLowerCase()
@@ -271,6 +273,16 @@ export class ApplicationWorkspace {
     return structuredClone(this.applicationsState)
   }
 
+  /** Whether the one-shot legacy AppRunner import already ran for this workspace. */
+  legacyAppRunnerMigrationCompleted() {
+    return Boolean(this.settingsState.legacyAppRunnerMigrationCompletedAt)
+  }
+
+  markLegacyAppRunnerMigrationCompleted() {
+    this.settingsState = { ...this.settingsState, legacyAppRunnerMigrationCompletedAt: nowIso() }
+    this.persistSettings()
+  }
+
   getApplication(applicationId: string) {
     const application = this.applicationsState.find((item) => item.id === applicationId)
     return application ? structuredClone(application) : undefined
@@ -316,15 +328,23 @@ export class ApplicationWorkspace {
     return structuredClone(application)
   }
 
-  updateApplication(application: GroveApplication) {
-    const current = this.applicationsState.find((item) => item.id === application.id)
+  /**
+   * Read-modify-write against the CURRENT record. Callers describe their changes as a function
+   * of the freshly-read application instead of passing a whole-record snapshot, so an update
+   * made while another operation was awaiting (e.g. a config PATCH during a deploy) is merged,
+   * never silently overwritten. The method is synchronous, which makes the read-merge-write
+   * sequence atomic with respect to any other updateApplication call.
+   */
+  updateApplication(applicationId: string, changes: (current: GroveApplication) => Partial<GroveApplication>) {
+    const current = this.applicationsState.find((item) => item.id === applicationId)
     if (!current) {
       throw new Error('Application not found')
     }
-    if (current.slug !== application.slug) {
+    const merged = { ...current, ...changes(structuredClone(current)) }
+    if (merged.slug !== current.slug) {
       throw new Error('Application slug cannot be changed.')
     }
-    const next = applicationSchema.parse({ ...application, updatedAt: nowIso() }) as GroveApplication
+    const next = applicationSchema.parse({ ...merged, updatedAt: nowIso() }) as GroveApplication
     if (this.persist) {
       this.writeApplication(next)
     }
@@ -437,7 +457,19 @@ export class ApplicationWorkspace {
       }
       return settings
     }
-    const parsed = settingsSchema.parse(parse(readFileSync(this.settingsPath, 'utf8'))) as GroveSettings
+    let parsed: GroveSettings
+    try {
+      parsed = settingsSchema.parse(parse(readFileSync(this.settingsPath, 'utf8'))) as GroveSettings
+    } catch (error) {
+      // A truncated/corrupt settings file must not kill startup: quarantine it and boot
+      // with defaults (a fresh settings.yaml is written below by ensureWorkspace).
+      const quarantined = quarantineCorruptFile(this.settingsPath)
+      console.warn(
+        `Grove: unreadable settings file moved to ${quarantined ?? this.settingsPath}; starting with defaults.`,
+        error,
+      )
+      return defaultSettings(workspacePath)
+    }
     return {
       ...parsed,
       workspacePath: resolve(workspacePath ?? parsed.workspacePath),
@@ -455,9 +487,8 @@ export class ApplicationWorkspace {
     if (!this.persist) {
       return
     }
-    mkdirSync(dirname(this.settingsPath), { recursive: true })
     const text = stringify(settingsSchema.parse(this.settingsState))
-    writeFileSync(this.settingsPath, text, 'utf8')
+    atomicWriteFileSync(this.settingsPath, text)
   }
 
   private applicationDirectoryForSlug(slug: string) {
@@ -480,10 +511,14 @@ export class ApplicationWorkspace {
           const parsed = applicationFileSchema.parse(parse(readFileSync(metadataPath, 'utf8')))
           return [normalizeApplication(parsed.application as GroveApplication, appDir)]
         } catch (error) {
-          throw new Error(
-            `Invalid application metadata at ${metadataPath}: ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error },
+          // One corrupt application.yaml must not kill the whole scan: quarantine it and
+          // skip the application instead of throwing during startup.
+          const quarantined = quarantineCorruptFile(metadataPath)
+          console.warn(
+            `Grove: invalid application metadata at ${metadataPath}; moved to ${quarantined ?? metadataPath} and skipped.`,
+            error,
           )
+          return []
         }
       })
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
@@ -491,8 +526,7 @@ export class ApplicationWorkspace {
 
   private writeApplication(application: GroveApplication) {
     const metadataPath = join(this.applicationDirectory(application), '.grove', 'application.yaml')
-    mkdirSync(dirname(metadataPath), { recursive: true })
     const payload = applicationFileSchema.parse({ schemaVersion: 2, application })
-    writeFileSync(metadataPath, stringify(payload), 'utf8')
+    atomicWriteFileSync(metadataPath, stringify(payload))
   }
 }

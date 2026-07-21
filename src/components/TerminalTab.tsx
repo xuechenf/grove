@@ -188,7 +188,14 @@ function TerminalSessionView({ vm, pane, active, commandDispatch, onCommand }: T
       onCommandRef.current(command, output)
     }
 
-    window.requestAnimationFrame(() => {
+    // The frame can fire after cleanup (StrictMode's dev remount, or an unmount within
+    // one frame of mount): bail out before touching the disposed terminal or opening a
+    // socket that nobody would ever close.
+    const frameId = window.requestAnimationFrame(() => {
+      if (disposed) {
+        return
+      }
+
       fitAndResize()
 
       if (apiDisabled() || typeof WebSocket === 'undefined') {
@@ -276,6 +283,7 @@ function TerminalSessionView({ vm, pane, active, commandDispatch, onCommand }: T
 
     return () => {
       disposed = true
+      window.cancelAnimationFrame(frameId)
       dataDisposable?.dispose()
       resizeObserver?.disconnect()
       window.removeEventListener('resize', fitAndResize)

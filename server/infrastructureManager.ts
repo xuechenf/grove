@@ -319,10 +319,9 @@ export class InfrastructureManager {
   }
 
   private saveEnvironment(application: GroveApplication, environment: ApplicationEnvironment) {
-    const next = this.workspace.updateApplication({
-      ...application,
-      environments: [environment, ...application.environments.filter((item) => item.id !== environment.id)],
-    })
+    const next = this.workspace.updateApplication(application.id, (current) => ({
+      environments: [environment, ...current.environments.filter((item) => item.id !== environment.id)],
+    }))
     this.options.onApplicationUpdated?.(next)
     return next
   }

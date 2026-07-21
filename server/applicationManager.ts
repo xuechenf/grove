@@ -24,7 +24,7 @@ import type {
   VM,
 } from '../src/types'
 import type { SshSessionManager } from './sshSessionManager'
-import { ApplicationWorkspace } from './applicationWorkspace'
+import { ApplicationWorkspace, slugify } from './applicationWorkspace'
 
 export interface ApplicationManagerOptions {
   onApplicationUpdated?: (application: GroveApplication) => void
@@ -128,7 +128,8 @@ function digestPath(path: string) {
   return `sha256:${hash.digest('hex')}`
 }
 
-function runProcess(
+/** Exported for tests: the stdin-EOF behavior is covered by a regression test. */
+export function runProcess(
   command: string,
   args: string[],
   options: { cwd: string; logPath?: string; shell?: boolean; environment?: Record<string, string> },
@@ -140,6 +141,10 @@ function runProcess(
       env: { ...process.env, ...options.environment },
       windowsHide: true,
     })
+    // Close stdin immediately: a child that reads it (package managers, credential prompts)
+    // gets a clean EOF instead of blocking forever on a pipe nobody ever writes to.
+    child.stdin.on('error', () => {})
+    child.stdin.end()
     let stdout = ''
     let stderr = ''
     const record = (label: string, chunk: Buffer) => {
@@ -235,14 +240,13 @@ export class ApplicationManager {
   }
 
   updateConfiguration(applicationId: string, input: GroveApplicationInput) {
-    const application = this.requireApplication(applicationId)
-    const next = this.workspace.updateApplication({
-      ...application,
+    this.requireApplication(applicationId)
+    const next = this.workspace.updateApplication(applicationId, () => ({
       name: input.name.trim(),
       description: input.description?.trim() || undefined,
       source: input.source,
       configuration: input.configuration,
-    })
+    }))
     this.options.onApplicationUpdated?.(next)
     return next
   }
@@ -269,14 +273,18 @@ export class ApplicationManager {
         args.push('--branch', application.source.ref)
       }
       args.push('--', application.source.repoUrl, stagingPath)
-      const result = await runProcess('git', args, { cwd: dirname(stagingPath) })
+      // Fail fast on private repos instead of prompting for credentials on a terminal
+      // nobody is watching (which would hang the request and leak the clone).
+      const result = await runProcess('git', args, { cwd: dirname(stagingPath), environment: { GIT_TERMINAL_PROMPT: '0' } })
       if (result.exitCode !== 0) {
         throw new Error(result.stderr.trim() || 'Git clone failed.')
       }
     }
 
     replaceDirectoryAtomically(stagingPath, sourcePath)
-    const next = this.workspace.updateApplication(application)
+    // The record itself is unchanged; touch updatedAt via a no-op merge against the
+    // current record so concurrent edits made during the clone are preserved.
+    const next = this.workspace.updateApplication(application.id, () => ({}))
     this.options.onApplicationUpdated?.(next)
     return next
   }
@@ -307,7 +315,9 @@ export class ApplicationManager {
       createdAt: nowIso(),
       buildLogRelativePath: relative(this.workspace.applicationDirectory(application), buildLogPath),
     }
-    application = this.workspace.updateApplication({ ...application, versions: [version, ...application.versions] })
+    application = this.workspace.updateApplication(application.id, (current) => ({
+      versions: [version, ...current.versions],
+    }))
     this.options.onApplicationUpdated?.(application)
 
     try {
@@ -404,9 +414,8 @@ export class ApplicationManager {
       targetVmIds: targets,
       targets: targets.map((vmId) => ({ vmId, status: 'queued' })),
     }
-    application = this.workspace.updateApplication({
-      ...application,
-      deployments: [deployment, ...application.deployments],
+    application = this.workspace.updateApplication(application.id, (current) => ({
+      deployments: [deployment, ...current.deployments],
       instances: targets.reduce(
         (instances, vmId) => this.upsertInstance(instances, {
           vmId,
@@ -417,9 +426,9 @@ export class ApplicationManager {
           updatedAt: nowIso(),
           lastDeploymentId: deployment.id,
         }),
-        application.instances,
+        current.instances,
       ),
-    })
+    }))
     this.publishDeployment(application, deployment)
 
     for (const vmId of targets) {
@@ -433,10 +442,9 @@ export class ApplicationManager {
           completedAt: nowIso(),
           detail,
         })
-        application = this.workspace.updateApplication({
-          ...application,
+        application = this.workspace.updateApplication(application.id, (current) => ({
           activeVersionId: version.id,
-          instances: this.upsertInstance(application.instances, {
+          instances: this.upsertInstance(current.instances, {
             vmId,
             versionId: version.id,
             desiredVersionId: version.id,
@@ -447,7 +455,7 @@ export class ApplicationManager {
             healthDetail: detail,
             lastDeploymentId: deployment.id,
           }),
-        })
+        }))
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         deployment = this.updateDeploymentTarget(deployment, vmId, {
@@ -455,9 +463,8 @@ export class ApplicationManager {
           completedAt: nowIso(),
           detail,
         })
-        application = this.workspace.updateApplication({
-          ...application,
-          instances: this.upsertInstance(application.instances, {
+        application = this.workspace.updateApplication(application.id, (current) => ({
+          instances: this.upsertInstance(current.instances, {
             vmId,
             desiredVersionId: version.id,
             status: 'failed',
@@ -467,7 +474,7 @@ export class ApplicationManager {
             healthDetail: detail,
             lastDeploymentId: deployment.id,
           }),
-        })
+        }))
       }
       application = this.persistDeployment(application, deployment)
     }
@@ -478,10 +485,10 @@ export class ApplicationManager {
       status: healthy === targets.length ? 'succeeded' : healthy > 0 ? 'partial' : 'failed',
       completedAt: nowIso(),
     }
-    application = this.workspace.updateApplication({
-      ...this.persistDeployment(application, deployment),
-      health: deriveHealth(application.instances),
-    })
+    application = this.persistDeployment(application, deployment)
+    application = this.workspace.updateApplication(application.id, (current) => ({
+      health: deriveHealth(current.instances),
+    }))
     this.publishDeployment(application, deployment)
     return { application, deployment }
   }
@@ -503,48 +510,67 @@ export class ApplicationManager {
   }
 
   migrateLegacyAppRunnerServices(services: AppRunnerService[]) {
+    // One-shot import: the completion marker lives in settings.yaml so a restart cannot
+    // re-import services (which previously created duplicates after a rename).
+    if (this.workspace.legacyAppRunnerMigrationCompleted()) {
+      return []
+    }
     const grouped = new Map<string, AppRunnerService[]>()
     for (const service of services) {
       grouped.set(service.name, [...(grouped.get(service.name) ?? []), service])
     }
     const migrated: GroveApplication[] = []
+    let failed = false
     for (const [name, serviceGroup] of grouped) {
-      if (this.workspace.listApplications().some((application) => application.name === name)) {
+      // Match by slug as well as name: a renamed application keeps its slug, so the guard
+      // still recognizes it and cannot produce a duplicate.
+      const slug = slugify(name)
+      if (this.workspace.listApplications().some((application) => application.name === name || (slug && application.slug === slug))) {
         continue
       }
       const first = serviceGroup[0]
       if (!first) {
         continue
       }
-      const source = first.source.type === 'github'
-        ? { type: 'git' as const, repoUrl: first.source.repoUrl, ref: first.source.ref }
-        : first.source
-      let application = this.workspace.createApplication({
-        name,
-        description: 'Imported from Grove v0.1 AppRunner metadata.',
-        source,
-        configuration: {
-          installCommand: first.installCommand,
-          buildCommand: first.buildCommand,
-          artifactPath: '.',
-          startCommand: first.startCommand,
-          port: first.port,
-          healthCheckPath: '/',
-          healthCheckTimeoutSeconds: 30,
-          environment: {},
-        },
-      })
-      const instances: ApplicationInstance[] = serviceGroup.map((service) => ({
-        vmId: service.vmId,
-        status: service.state === 'running' && service.listening ? 'healthy' : service.state === 'stopped' ? 'stopped' : 'degraded',
-        remotePath: service.remotePath,
-        unitName: service.unitName,
-        updatedAt: service.updatedAt,
-        healthDetail: service.lastDeploySummary,
-      }))
-      application = this.workspace.updateApplication({ ...application, instances, health: deriveHealth(instances) })
-      this.options.onApplicationUpdated?.(application)
-      migrated.push(application)
+      try {
+        const source = first.source.type === 'github'
+          ? { type: 'git' as const, repoUrl: first.source.repoUrl, ref: first.source.ref }
+          : first.source
+        let application = this.workspace.createApplication({
+          name,
+          description: 'Imported from Grove v0.1 AppRunner metadata.',
+          source,
+          configuration: {
+            installCommand: first.installCommand,
+            buildCommand: first.buildCommand,
+            artifactPath: '.',
+            startCommand: first.startCommand,
+            port: first.port,
+            healthCheckPath: '/',
+            healthCheckTimeoutSeconds: 30,
+            environment: {},
+          },
+        })
+        const instances: ApplicationInstance[] = serviceGroup.map((service) => ({
+          vmId: service.vmId,
+          status: service.state === 'running' && service.listening ? 'healthy' : service.state === 'stopped' ? 'stopped' : 'degraded',
+          remotePath: service.remotePath,
+          unitName: service.unitName,
+          updatedAt: service.updatedAt,
+          healthDetail: service.lastDeploySummary,
+        }))
+        application = this.workspace.updateApplication(application.id, () => ({ instances, health: deriveHealth(instances) }))
+        this.options.onApplicationUpdated?.(application)
+        migrated.push(application)
+      } catch (error) {
+        // One unreadable legacy service must not abort the import (or startup): skip it and
+        // leave the marker unset so it is retried on the next boot.
+        failed = true
+        console.warn(`Grove: legacy AppRunner service "${name}" could not be imported.`, error)
+      }
+    }
+    if (!failed) {
+      this.workspace.markLegacyAppRunnerMigrationCompleted()
     }
     return migrated
   }
@@ -566,10 +592,9 @@ export class ApplicationManager {
   }
 
   private replaceVersion(application: GroveApplication, version: ApplicationVersion) {
-    return this.workspace.updateApplication({
-      ...application,
-      versions: application.versions.map((item) => (item.id === version.id ? version : item)),
-    })
+    return this.workspace.updateApplication(application.id, (current) => ({
+      versions: current.versions.map((item) => (item.id === version.id ? version : item)),
+    }))
   }
 
   private async sourceRevision(frozenSourcePath: string) {
@@ -600,10 +625,9 @@ export class ApplicationManager {
   }
 
   private persistDeployment(application: GroveApplication, deployment: ApplicationDeployment) {
-    const next = this.workspace.updateApplication({
-      ...application,
-      deployments: application.deployments.map((item) => (item.id === deployment.id ? deployment : item)),
-    })
+    const next = this.workspace.updateApplication(application.id, (current) => ({
+      deployments: current.deployments.map((item) => (item.id === deployment.id ? deployment : item)),
+    }))
     this.publishDeployment(next, deployment)
     return next
   }

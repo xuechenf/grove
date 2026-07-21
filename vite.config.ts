@@ -1,9 +1,11 @@
 /// <reference types="vitest/config" />
 import type { Server as HttpProxyServer } from 'node:http'
+import { readFileSync } from 'node:fs'
 import type { Socket } from 'node:net'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { projectStatePath } from './server/projectState'
 
 /**
  * Socket errors that fire when a proxied WebSocket is torn down rather than closed cleanly:
@@ -27,6 +29,30 @@ function isBenignProxyError(value: unknown) {
 
 type EmittingTarget = { emit: (event: string | symbol, ...args: unknown[]) => boolean }
 
+/**
+ * Dev-only companion to the backend's out-of-band UI-token delivery (see server/apiToken.ts):
+ * the browser fetches the per-boot token from the dev server's own origin, served from the
+ * local token file, because the backend API itself never returns it. Same-origin policy keeps
+ * the response unreadable to other web sites; local processes can already read the file.
+ */
+function groveDevUiToken(): Plugin {
+  return {
+    name: 'grove-dev-ui-token',
+    configureServer(server) {
+      server.middlewares.use('/__grove-dev-token', (_request, response) => {
+        response.setHeader('Content-Type', 'application/json')
+        try {
+          const token = readFileSync(projectStatePath('runtime', 'ui-token'), 'utf8').trim()
+          response.end(JSON.stringify({ token }))
+        } catch {
+          response.statusCode = 404
+          response.end(JSON.stringify({ token: null }))
+        }
+      })
+    },
+  }
+}
+
 /** Wrap emit so a benign `error` event is dropped before any listener (incl. vite's logger) runs. */
 function dropBenignErrors(target: EmittingTarget) {
   const original = target.emit.bind(target)
@@ -39,7 +65,7 @@ function dropBenignErrors(target: EmittingTarget) {
 }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), groveDevUiToken()],
   server: {
     proxy: {
       '/api': {

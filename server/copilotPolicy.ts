@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { parse, stringify } from 'yaml'
 import type { CopilotScope } from '../src/types'
+import { isReadOnlyCommand, splitSimpleCommands } from './commandProfiles'
 import { projectStatePath } from './projectState'
 
 interface PolicyRule {
@@ -29,9 +30,24 @@ export class CopilotPolicy {
     return this.rules
   }
 
+  /**
+   * A command is auto-approved only when EVERY simple command in it is covered: each
+   * segment must be read-only on its own or start with a remembered prefix. A plain
+   * startsWith on the whole line let `systemctl restart nginx; rm -rf ...` ride one
+   * "Always allow" decision.
+   */
   allows(scope: CopilotScope, command: string) {
-    const normalized = command.trim()
-    return this.rules.some((rule) => rule.scope === scope && normalized.startsWith(rule.prefix))
+    const segments = splitSimpleCommands(command.trim())
+    if (!segments || segments.length === 0) {
+      return false
+    }
+    const scopeRules = this.rules.filter((rule) => rule.scope === scope)
+    if (scopeRules.length === 0) {
+      return false
+    }
+    return segments.every(
+      (segment) => isReadOnlyCommand(segment) || scopeRules.some((rule) => segment.startsWith(rule.prefix)),
+    )
   }
 
   /** Remember a narrow rule from the leading token(s) of an approved command. */

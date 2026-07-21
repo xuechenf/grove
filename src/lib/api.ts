@@ -73,13 +73,18 @@ function apiUrl(path: string) {
 }
 
 function websocketUrl(path: string) {
+  // Browsers cannot set x-grove-token on a WebSocket, so the per-boot token travels as a
+  // query parameter; the backend validates it during the upgrade (see server/start.ts).
   const explicit = import.meta.env.VITE_API_WS_URL
-  if (explicit) {
-    return `${explicit}${path}`
+  const url = explicit ? new URL(path, explicit) : new URL(path, window.location.origin)
+  if (url.protocol === 'http:') {
+    url.protocol = 'ws:'
+  } else if (url.protocol === 'https:') {
+    url.protocol = 'wss:'
   }
-
-  const url = new URL(path, window.location.origin)
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  if (apiToken) {
+    url.searchParams.set('token', apiToken)
+  }
   return url.toString()
 }
 
@@ -105,8 +110,33 @@ async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export function getBootstrap() {
-  return requestJson<{ token: string | null; runtime: CopilotRuntimeStatus }>('/api/bootstrap')
+export async function getBootstrap() {
+  const bootstrap = await requestJson<{ runtime: CopilotRuntimeStatus }>('/api/bootstrap')
+  const token = await resolveUiToken()
+  return { token, runtime: bootstrap.runtime }
+}
+
+/**
+ * The per-boot UI token never travels the backend API (see server/apiToken.ts). The desktop
+ * shell hands it over through its IPC bridge; the Vite dev server serves the local token
+ * file at /__grove-dev-token. Elsewhere (tests, preview builds) there is no token and
+ * mutating calls stay 401-gated, exactly as when bootstrap used to fail.
+ */
+async function resolveUiToken(): Promise<string | null> {
+  const desktop = window.groveDesktop?.getUiToken
+  if (desktop) {
+    return desktop()
+  }
+  try {
+    const response = await fetch(apiUrl('/__grove-dev-token'))
+    if (!response.ok) {
+      return null
+    }
+    const body = (await response.json()) as { token?: string | null }
+    return body.token ?? null
+  } catch {
+    return null
+  }
 }
 
 export function getSnapshot() {
@@ -410,9 +440,10 @@ export interface EventsSocketHandle {
 /**
  * Events stream with automatic reconnection. The dev backend restarts on every server-file
  * save (tsx watch), which kills the socket and rotates the per-boot UI token; without
- * reconnection an open tab silently goes deaf and every mutating call starts failing. On
- * each (re)connection the server pushes a fresh `snapshot` event, so state resyncs itself;
- * `onReconnect` lets the caller refresh the bootstrap token as well.
+ * reconnection an open tab silently goes deaf and every mutating call starts failing. A
+ * rejected upgrade (e.g. rotated token) surfaces as a plain close, so `onReconnect` fires
+ * on every close — BEFORE the next attempt — to re-fetch the bootstrap token in time; on
+ * each successful (re)connection the server pushes a `snapshot` event, resyncing state.
  */
 export function createEventsSocket(
   onEvent: (event: ServerEvent) => void,
@@ -426,11 +457,7 @@ export function createEventsSocket(
   const connect = () => {
     socket = new WebSocket(websocketUrl('/api/events'))
     socket.addEventListener('open', () => {
-      const wasReconnect = attempts > 0
       attempts = 0
-      if (wasReconnect) {
-        options.onReconnect?.()
-      }
     })
     socket.addEventListener('message', (event) => {
       onEvent(JSON.parse(String(event.data)) as ServerEvent)
@@ -440,6 +467,7 @@ export function createEventsSocket(
         return
       }
       attempts += 1
+      options.onReconnect?.()
       const delay = Math.min(8000, 500 * 2 ** Math.min(attempts - 1, 4)) + Math.floor(Math.random() * 250)
       timer = setTimeout(connect, delay)
     })

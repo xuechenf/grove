@@ -121,14 +121,16 @@ function uniqueVmId(input: VmConnectionInput, configs: VmConfig[]) {
 function configFromConnectionInput(input: VmConnectionInput, id: string, existing?: VmConfig): VmConfig {
   const ipAddress = input.ipAddress.trim()
   const port = Number(input.port)
+  const pemPath = input.pemPath.trim()
   return {
     id,
     name: cleanText(input.name) ?? existing?.name ?? ipAddress,
     host: ipAddress,
     user: cleanText(input.user) ?? existing?.user ?? 'root',
     port,
-    keyPath: input.pemPath.trim(),
-    useAgent: false,
+    keyPath: pemPath || undefined,
+    // A PEM path always wins; the agent flag only applies when no key file is configured.
+    useAgent: input.useAgent === true && !pemPath,
     os: cleanText(input.os) ?? existing?.os ?? 'Linux',
     // Inventory labels are inert metadata (no UI); preserve whatever the YAML had.
     labels: existing?.labels,
@@ -1186,7 +1188,7 @@ export class GroveStore implements CopilotToolHost {
 
     const activity = makeActivity(
       'VM added',
-      `${config.user}@${config.host}:${config.port} using ${config.keyPath}`,
+      `${config.user}@${config.host}:${config.port} using ${config.keyPath ?? (config.useAgent ? 'ssh-agent' : 'not configured')}`,
       'success',
     )
     const template = vmFromConfig(config)
@@ -1248,6 +1250,18 @@ export class GroveStore implements CopilotToolHost {
     const existingConfig = this.vmConfigs.find((config) => config.id === vmId)
     const config = configFromConnectionInput(input, vmId, existingConfig)
     this.assertUniqueEndpoint(config, vmId)
+    // The session manager caches ssh2 clients by VM id: when the connection profile
+    // actually changes, drop the cached connection so the next command dials the new host.
+    if (
+      !existingConfig ||
+      existingConfig.host !== config.host ||
+      existingConfig.port !== config.port ||
+      existingConfig.user !== config.user ||
+      existingConfig.keyPath !== config.keyPath ||
+      existingConfig.useAgent !== config.useAgent
+    ) {
+      this.ssh.closeVmConnection?.(vmId)
+    }
     this.vmConfigs = this.vmConfigs.some((item) => item.id === vmId)
       ? this.vmConfigs.map((item) => (item.id === vmId ? config : item))
       : [config, ...this.vmConfigs]
@@ -1255,7 +1269,7 @@ export class GroveStore implements CopilotToolHost {
 
     const activity = makeActivity(
       'Connection profile updated',
-      `${config.user}@${config.host}:${config.port} using ${config.keyPath}`,
+      `${config.user}@${config.host}:${config.port} using ${config.keyPath ?? (config.useAgent ? 'ssh-agent' : 'not configured')}`,
       'success',
     )
     const template = vmFromConfig(config, vm)
@@ -1545,6 +1559,9 @@ export class GroveStore implements CopilotToolHost {
   }
 
   deleteVm(vmId: string) {
+    // Drop the cached SSH connection too: its keepalive would otherwise keep the TCP
+    // connection (and the keepalive timer) alive for the rest of the process lifetime.
+    this.ssh.closeVmConnection?.(vmId)
     this.requireVm(vmId)
     this.vmConfigs = this.vmConfigs.filter((config) => config.id !== vmId)
     this.persistInventory()
@@ -1563,31 +1580,83 @@ export class GroveStore implements CopilotToolHost {
     conflict?: TransferJob['conflict']
   }) {
     const vm = this.requireVm(input.vmId)
-    const transfer: TransferJob = this.ssh.transferFile
-      ? await this.ssh.transferFile({ vm, ...input })
-      : {
-          id: id('job'),
-          vmId: input.vmId,
-          direction: input.direction,
-          source: input.source,
-          target: input.target,
-          fileName: input.fileName,
-          status: 'in_progress',
-          progress: input.conflict ? 56 : 64,
-          speed: input.conflict
-            ? input.conflict === 'overwrite'
-              ? 'overwriting remote file'
-              : `${input.conflict} remote file`
-            : input.direction === 'download'
-              ? '18.2 MB/s'
-              : '12.4 MB/s',
-          conflict: input.conflict,
-        }
+    const directionLabel = input.direction === 'download' ? 'Download' : 'Upload'
+
+    if (this.ssh.transferFile) {
+      // Record the job before the transfer runs, so a failure still leaves a 'failed'
+      // record, a transfer.updated event, and an activity entry instead of vanishing.
+      const transfer: TransferJob = {
+        id: id('job'),
+        vmId: input.vmId,
+        direction: input.direction,
+        source: input.source,
+        target: input.target,
+        fileName: input.fileName,
+        status: 'in_progress',
+        progress: 0,
+        speed: 'starting',
+        conflict: input.conflict,
+      }
+      this.transfers = [transfer, ...this.transfers]
+      this.publish({ type: 'transfer.updated', payload: transfer })
+      this.addActivity(
+        input.vmId,
+        makeActivity(`${directionLabel} started`, `${input.source} -> ${input.target}`),
+        'user',
+        { transferJobId: transfer.id },
+      )
+
+      try {
+        const finished = await this.ssh.transferFile({ vm, ...input })
+        const completed: TransferJob = { ...finished, id: transfer.id }
+        this.transfers = this.transfers.map((item) => (item.id === transfer.id ? completed : item))
+        this.publish({ type: 'transfer.updated', payload: completed })
+        this.addActivity(
+          input.vmId,
+          makeActivity(`${directionLabel} completed`, `${input.source} -> ${input.target}`, 'success'),
+          'user',
+          { transferJobId: transfer.id },
+        )
+        return completed
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Transfer failed.'
+        const failed: TransferJob = { ...transfer, status: 'failed', speed: message }
+        this.transfers = this.transfers.map((item) => (item.id === transfer.id ? failed : item))
+        this.publish({ type: 'transfer.updated', payload: failed })
+        this.addActivity(
+          input.vmId,
+          makeActivity(`${directionLabel} failed`, message, 'warning'),
+          'user',
+          { transferJobId: transfer.id },
+        )
+        throw error
+      }
+    }
+
+    // Mock/fixture path (no real SFTP): record a simulated in-progress job.
+    const transfer: TransferJob = {
+      id: id('job'),
+      vmId: input.vmId,
+      direction: input.direction,
+      source: input.source,
+      target: input.target,
+      fileName: input.fileName,
+      status: 'in_progress',
+      progress: input.conflict ? 56 : 64,
+      speed: input.conflict
+        ? input.conflict === 'overwrite'
+          ? 'overwriting remote file'
+          : `${input.conflict} remote file`
+        : input.direction === 'download'
+          ? '18.2 MB/s'
+          : '12.4 MB/s',
+      conflict: input.conflict,
+    }
     this.transfers = [transfer, ...this.transfers]
     this.publish({ type: 'transfer.updated', payload: transfer })
     this.addActivity(
       input.vmId,
-      makeActivity(input.direction === 'download' ? 'Download started' : 'Upload started', `${input.source} -> ${input.target}`),
+      makeActivity(`${directionLabel} started`, `${input.source} -> ${input.target}`),
       'user',
       { transferJobId: transfer.id },
     )

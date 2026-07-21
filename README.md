@@ -6,13 +6,13 @@ Grove is a local-first desktop app for managing Linux machines reachable over SS
 
 Installers are published on GitHub Releases:
 
-- [Grove v0.3.1](https://github.com/xuechenf/grove/releases/tag/v0.3.1)
+- [Grove v0.3.2](https://github.com/xuechenf/grove/releases/tag/v0.3.2)
 - Windows: setup installer and portable `.exe`
 - macOS: `.dmg` and zipped app bundle
 
 The desktop app runs the backend locally and serves the UI from the packaged app. macOS builds are currently unsigned.
 
-Version 0.3.1 adds Windows cross-drive file navigation with an editable local path, a native folder picker, remembered locations, UNC support, quick workspace shortcuts, and clear invalid-path feedback. Every VM also has a consistent Overview, Monitoring, Applications, Files, Terminal, Activity, and Settings workspace. AWS and Alibaba Cloud machines use live provider telemetry and security-group APIs; other machines fall back cleanly to SSH host monitoring.
+Version 0.3.2 is the post-bug-bash reliability release. It hardens local API and WebSocket authentication, atomic state recovery, concurrent application builds and deployments, SSH/SFTP session handling, and cloud-provider pagination and cleanup. It also fixes narrow-panel cloud layouts, makes all-traffic firewall rules readable, and lets VM setup explicitly use a private key, the SSH agent, or no credential.
 
 ## Requirements
 

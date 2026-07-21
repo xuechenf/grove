@@ -157,37 +157,7 @@ export class CloudProviderManager implements CloudControlService {
         const result = await adapter.listMachines(context)
         warnings.push(...result.warnings.map((warning) => `${profile.name}: ${warning}`))
         for (const machine of result.machines) {
-          const id = opaqueId('cloud-machine', profile.id, machine.location, machine.nativeId)
-          const reference = { context, adapter, machine }
-          this.machines.set(id, reference)
-          const firewalls = machine.firewalls.map((firewall) => {
-            const firewallId = opaqueId('cloud-firewall', profile.id, machine.location, firewall.nativeId)
-            this.firewalls.set(firewallId, { ...reference, firewallNativeId: firewall.nativeId })
-            return { id: firewallId, name: firewall.name }
-          })
-          machines.push({
-            id,
-            nativeId: machine.nativeId,
-            provider: profile.kind as CloudMachine['provider'],
-            credentialProfileId: profile.id,
-            credentialProfileName: profile.name,
-            name: machine.name,
-            location: machine.location,
-            zone: machine.zone,
-            state: machine.state,
-            publicIp: machine.publicIp,
-            privateIp: machine.privateIp,
-            machineType: machine.machineType,
-            imageId: machine.imageId,
-            launchedAt: machine.launchedAt,
-            monitoring: machine.monitoring,
-            vpcId: machine.vpcId,
-            subnetId: machine.subnetId,
-            networkType: machine.networkType,
-            maxBandwidthInMbps: machine.maxBandwidthInMbps,
-            maxBandwidthOutMbps: machine.maxBandwidthOutMbps,
-            firewalls,
-          })
+          machines.push(this.registerMachine({ context, adapter, machine }))
         }
       } catch (error) {
         warnings.push(`${profile.name}: ${error instanceof Error ? error.message : 'inventory failed'}`)
@@ -201,6 +171,45 @@ export class CloudProviderManager implements CloudControlService {
     }
   }
 
+  /**
+   * Register a scanned machine and its firewalls, and build its CloudMachine view. Firewall
+   * ids embed the machine: a security group attached to several machines gets one reference
+   * per machine, so firewall operations stay valid for every attached machine.
+   */
+  private registerMachine(reference: MachineReference): CloudMachine {
+    const { context, machine } = reference
+    const id = opaqueId('cloud-machine', context.profile.id, machine.location, machine.nativeId)
+    this.machines.set(id, reference)
+    const firewalls = machine.firewalls.map((firewall) => {
+      const firewallId = opaqueId('cloud-firewall', context.profile.id, machine.location, machine.nativeId, firewall.nativeId)
+      this.firewalls.set(firewallId, { ...reference, firewallNativeId: firewall.nativeId })
+      return { id: firewallId, name: firewall.name }
+    })
+    return {
+      id,
+      nativeId: machine.nativeId,
+      provider: context.profile.kind as CloudMachine['provider'],
+      credentialProfileId: context.profile.id,
+      credentialProfileName: context.profile.name,
+      name: machine.name,
+      location: machine.location,
+      zone: machine.zone,
+      state: machine.state,
+      publicIp: machine.publicIp,
+      privateIp: machine.privateIp,
+      machineType: machine.machineType,
+      imageId: machine.imageId,
+      launchedAt: machine.launchedAt,
+      monitoring: machine.monitoring,
+      vpcId: machine.vpcId,
+      subnetId: machine.subnetId,
+      networkType: machine.networkType,
+      maxBandwidthInMbps: machine.maxBandwidthInMbps,
+      maxBandwidthOutMbps: machine.maxBandwidthOutMbps,
+      firewalls,
+    }
+  }
+
   async listFirewallRules(machineId: string): Promise<CloudFirewallRule[]> {
     const reference = await this.requireMachine(machineId)
     const rules = await reference.adapter.listFirewallRules(reference.context, reference.machine)
@@ -209,12 +218,14 @@ export class CloudProviderManager implements CloudControlService {
         'cloud-firewall',
         reference.context.profile.id,
         reference.machine.location,
+        reference.machine.nativeId,
         rule.firewallNativeId,
       )
       const ruleId = opaqueId(
         'cloud-rule',
         reference.context.profile.id,
         reference.machine.location,
+        reference.machine.nativeId,
         rule.nativeId,
       )
       const firewallReference = { ...reference, firewallNativeId: rule.firewallNativeId }
@@ -283,10 +294,16 @@ export class CloudProviderManager implements CloudControlService {
     await reference.adapter.power(reference.context, reference.machine, action)
     const inventory = await this.listMachines(reference.context.profile.id)
     const refreshed = inventory.machines.find((machine) => machine.id === machineId)
-    if (!refreshed) {
-      throw new Error('Cloud machine was not returned after the power action.')
+    if (refreshed) {
+      return refreshed
     }
-    return refreshed
+    // The power action itself already succeeded at the provider. A failed or partial
+    // inventory refresh (its errors are collected as warnings, not thrown) must not be
+    // reported to the user as a power failure — return the last known machine view.
+    console.warn(
+      `Grove: inventory refresh after the power action did not return machine ${machineId}; reporting its last known state.`,
+    )
+    return this.registerMachine(reference)
   }
 
   private async requireMachine(machineId: string) {

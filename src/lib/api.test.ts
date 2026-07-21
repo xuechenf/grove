@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, createVm, isApiUnavailableError } from './api'
+import { ApiError, createEventsSocket, createVm, getBootstrap, isApiUnavailableError, setApiToken } from './api'
 import type { VmConnectionInput } from '../types'
 
 const vmInput: VmConnectionInput = {
@@ -51,5 +51,64 @@ describe('API errors', () => {
     expect(error).toBeInstanceOf(ApiError)
     expect(error).toMatchObject({ message: 'Enter a valid IP address.', status: 400 })
     expect(isApiUnavailableError(error)).toBe(false)
+  })
+})
+
+describe('WebSocket token transport', () => {
+  it('appends the per-boot UI token to the events socket URL as a query parameter', () => {
+    const urls: string[] = []
+    class FakeWebSocket {
+      constructor(url: string) {
+        urls.push(url)
+      }
+      addEventListener() {}
+      close() {}
+    }
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+
+    setApiToken('boot-secret')
+    const handle = createEventsSocket(() => {})
+    handle.close()
+    setApiToken(undefined)
+
+    expect(urls).toHaveLength(1)
+    expect(urls[0]).toContain('/api/events')
+    expect(urls[0]).toContain('token=boot-secret')
+  })
+})
+
+describe('getBootstrap token resolution', () => {
+  it('prefers the desktop bridge token and skips the dev endpoint', async () => {
+    const originalDesktop = window.groveDesktop
+    window.groveDesktop = { chooseLocalDirectory: async () => null, getUiToken: async () => 'desktop-token' }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ runtime: { driver: 'mock', state: 'disabled' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const bootstrap = await getBootstrap()
+
+    expect(bootstrap.token).toBe('desktop-token')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/bootstrap')
+    window.groveDesktop = originalDesktop
+  })
+
+  it('falls back to the Vite dev token endpoint in the browser', async () => {
+    const originalDesktop = window.groveDesktop
+    delete window.groveDesktop
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      return Promise.resolve(
+        url.includes('/__grove-dev-token')
+          ? Response.json({ token: 'dev-token' })
+          : Response.json({ runtime: { driver: 'mock', state: 'disabled' } }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const bootstrap = await getBootstrap()
+
+    expect(bootstrap.token).toBe('dev-token')
+    expect(bootstrap.runtime).toEqual({ driver: 'mock', state: 'disabled' })
+    window.groveDesktop = originalDesktop
   })
 })

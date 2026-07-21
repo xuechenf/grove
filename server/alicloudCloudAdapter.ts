@@ -267,24 +267,35 @@ export class AlicloudCloudAdapter implements CloudProviderAdapter {
     ]
     const monitor = cloudMonitor(context)
     const settled = await Promise.allSettled(definitions.map(async (definition) => {
-      const response = record(await monitor.request('DescribeMetricList', {
-        Namespace: 'acs_ecs_dashboard',
-        MetricName: definition.metricName,
-        Dimensions: JSON.stringify([{ instanceId: machine.nativeId }]),
-        StartTime: start.getTime(),
-        EndTime: end.getTime(),
-        Period: '60',
-        Length: '1000',
-      }, { method: 'POST' }))
-      const raw = stringValue(response.Datapoints)
-      const points = raw ? JSON.parse(raw) as unknown : []
+      // DescribeMetricList truncates at Length datapoints and pages via NextToken; follow it
+      // so windows beyond a single page (~16.7h at 60s period) are not silently cut off.
+      // 20 pages covers the full 168h max window with headroom.
+      const datapoints: unknown[] = []
+      let nextToken: string | undefined
+      for (let page = 0; page < 20; page += 1) {
+        const response = record(await monitor.request('DescribeMetricList', {
+          Namespace: 'acs_ecs_dashboard',
+          MetricName: definition.metricName,
+          Dimensions: JSON.stringify([{ instanceId: machine.nativeId }]),
+          StartTime: start.getTime(),
+          EndTime: end.getTime(),
+          Period: '60',
+          Length: '1000',
+          ...(nextToken ? { NextToken: nextToken } : {}),
+        }, { method: 'POST' }))
+        const raw = stringValue(response.Datapoints)
+        if (raw) {
+          const parsed = JSON.parse(raw) as unknown
+          if (Array.isArray(parsed)) datapoints.push(...parsed)
+        }
+        nextToken = stringValue(response.NextToken)
+        if (!nextToken) break
+      }
       return {
         key: definition.key,
         label: definition.label,
         unit: definition.unit,
-        points: Array.isArray(points)
-          ? points.map(record).map((point) => ({ timestamp: metricTimestamp(point), value: metricValue(point) }))
-          : [],
+        points: datapoints.map(record).map((point) => ({ timestamp: metricTimestamp(point), value: metricValue(point) })),
       }
     }))
     const failures = settled.filter((result) => result.status === 'rejected')

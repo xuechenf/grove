@@ -34,12 +34,8 @@ export class NameComDnsManager {
       throw new Error('Name.com profile and hostname are required.')
     }
     const access = this.access(environment.nameComCredentialProfileId)
-    const domainsPayload = await this.request<{ domains?: Array<{ domainName?: string }> }>(
-      access,
-      '/domains?page=1&perPage=1000',
-    )
     const hostname = environment.hostname.toLowerCase().replace(/\.$/, '')
-    const domains = (domainsPayload.domains ?? [])
+    const domains = (await this.listAllPages<{ domainName?: string }>(access, '/domains', 'domains'))
       .map((domain) => domain.domainName?.toLowerCase())
       .filter((domain): domain is string => Boolean(domain))
       .filter((domain) => hostname === domain || hostname.endsWith(`.${domain}`))
@@ -49,11 +45,11 @@ export class NameComDnsManager {
       throw new Error(`The Name.com profile does not have DNS access to ${hostname}.`)
     }
     const host = relativeHost(hostname, domain)
-    const recordsPayload = await this.request<{ records?: NameComRecord[] }>(
+    const records = await this.listAllPages<NameComRecord>(
       access,
-      `/domains/${encodeURIComponent(domain)}/records?page=1&perPage=1000`,
+      `/domains/${encodeURIComponent(domain)}/records`,
+      'records',
     )
-    const records = recordsPayload.records ?? []
     let existing: NameComRecord | undefined
     if (environment.dnsRecordId) {
       existing = records.find((record) => String(record.id) === environment.dnsRecordId)
@@ -92,11 +88,7 @@ export class NameComDnsManager {
     }
     const access = this.access(environment.nameComCredentialProfileId)
     const hostname = environment.hostname.toLowerCase().replace(/\.$/, '')
-    const domainsPayload = await this.request<{ domains?: Array<{ domainName?: string }> }>(
-      access,
-      '/domains?page=1&perPage=1000',
-    )
-    const domain = (domainsPayload.domains ?? [])
+    const domain = (await this.listAllPages<{ domainName?: string }>(access, '/domains', 'domains'))
       .map((item) => item.domainName?.toLowerCase())
       .filter((item): item is string => Boolean(item))
       .filter((item) => hostname === item || hostname.endsWith(`.${item}`))
@@ -121,6 +113,36 @@ export class NameComDnsManager {
       baseUrl: (profile.configuration.apiBaseUrl || 'https://api.name.com/v4').replace(/\/$/, ''),
       authorization: authHeader(profile.configuration.username!, secrets.apiToken!),
     }
+  }
+
+  /**
+   * Follow the v4 pagination (nextPage/lastPage) instead of reading only page 1: accounts
+   * with more than one page of domains/records otherwise produced false "not found" errors
+   * and duplicate A records. Bounded so a misbehaving API cannot loop forever.
+   */
+  private async listAllPages<T>(
+    access: { baseUrl: string; authorization: string },
+    path: string,
+    key: 'domains' | 'records',
+  ): Promise<T[]> {
+    const results: T[] = []
+    let page = 1
+    for (let fetched = 0; fetched < 100; fetched += 1) {
+      const payload = await this.request<Record<string, unknown> & { nextPage?: number; lastPage?: number }>(
+        access,
+        `${path}?page=${page}&perPage=1000`,
+      )
+      const entries = payload[key]
+      if (Array.isArray(entries)) {
+        results.push(...(entries as T[]))
+      }
+      const lastPage = payload.lastPage ?? page
+      if (page >= lastPage) {
+        break
+      }
+      page = payload.nextPage ?? page + 1
+    }
+    return results
   }
 
   private async request<T = unknown>(

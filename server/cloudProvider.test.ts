@@ -151,4 +151,90 @@ describe('provider-neutral cloud control', () => {
     await expect(cloud.getMetrics(machine.id)).rejects.toThrow('Credential profile not found')
     expect(adapter.getMetrics).not.toHaveBeenCalled()
   })
+
+  it('manages a shared security group for every attached machine', async () => {
+    const { manager } = credentialManager()
+    const profile = manager.create({
+      kind: 'aws',
+      name: 'Cloud account',
+      configuration: { accessKeyId: 'AKIATEST', region: 'ap-northeast-1' },
+      secrets: { secretAccessKey: 'secret' },
+    })
+    const sharedFirewall = { nativeId: 'sg-shared', name: 'shared-sg' }
+    const adapter: CloudProviderAdapter = {
+      listMachines: vi.fn().mockResolvedValue({
+        warnings: [],
+        machines: [
+          { nativeId: 'i-aaa', location: 'ap-northeast-1', name: 'vm-a', state: 'running', firewalls: [sharedFirewall] },
+          { nativeId: 'i-bbb', location: 'ap-northeast-1', name: 'vm-b', state: 'running', firewalls: [sharedFirewall] },
+        ],
+      }),
+      listFirewallRules: vi.fn().mockResolvedValue([{
+        nativeId: 'sgr-1',
+        firewallNativeId: 'sg-shared',
+        firewallName: 'shared-sg',
+        direction: 'ingress',
+        protocol: 'tcp',
+        fromPort: 22,
+        toPort: 22,
+        source: '0.0.0.0/0',
+      }]),
+      addFirewallRule: vi.fn().mockResolvedValue(undefined),
+      removeFirewallRule: vi.fn().mockResolvedValue(undefined),
+      getMetrics: vi.fn(),
+      power: vi.fn(),
+    }
+    const cloud = new CloudProviderManager(manager, { aws: adapter })
+    const inventory = await cloud.listMachines(profile.id)
+    const a = inventory.machines.find((machine) => machine.name === 'vm-a')!
+    const b = inventory.machines.find((machine) => machine.name === 'vm-b')!
+
+    // Each machine gets its own reference to the shared security group...
+    expect(a.firewalls[0].id).not.toBe(b.firewalls[0].id)
+
+    // ...so firewall operations stay valid for both, not just the last machine scanned.
+    for (const machine of [a, b]) {
+      await cloud.addFirewallRule(machine.id, {
+        firewallId: machine.firewalls[0].id,
+        protocol: 'tcp',
+        fromPort: 22,
+        toPort: 22,
+        cidr: '127.0.0.1/32',
+      })
+      const rules = await cloud.listFirewallRules(machine.id)
+      await cloud.removeFirewallRule(machine.id, rules[0]!.id)
+    }
+    expect(adapter.addFirewallRule).toHaveBeenCalledTimes(2)
+    expect(adapter.removeFirewallRule).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports a successful power action even when the inventory refresh fails', async () => {
+    const { manager } = credentialManager()
+    const profile = manager.create({
+      kind: 'aws',
+      name: 'Cloud account',
+      configuration: { accessKeyId: 'AKIATEST', region: 'ap-northeast-1' },
+      secrets: { secretAccessKey: 'secret' },
+    })
+    const machine = { nativeId: 'i-aaa', location: 'ap-northeast-1', name: 'vm-a', state: 'running' as const, firewalls: [] }
+    const adapter: CloudProviderAdapter = {
+      listMachines: vi.fn()
+        .mockResolvedValueOnce({ warnings: [], machines: [machine] })
+        .mockRejectedValue(new Error('RequestLimitExceeded')), // transient failure on the refresh
+      listFirewallRules: vi.fn(),
+      addFirewallRule: vi.fn(),
+      removeFirewallRule: vi.fn(),
+      getMetrics: vi.fn(),
+      power: vi.fn().mockResolvedValue(undefined), // the power action itself succeeds
+    }
+    const cloud = new CloudProviderManager(manager, { aws: adapter })
+    const inventory = await cloud.listMachines(profile.id)
+
+    const result = await cloud.power(inventory.machines[0]!.id, 'reboot')
+
+    // Regression: a failed refresh used to surface as "not returned after the power action".
+    expect(adapter.power).toHaveBeenCalledOnce()
+    expect(result.id).toBe(inventory.machines[0]!.id)
+    expect(result.name).toBe('vm-a')
+  })
 })

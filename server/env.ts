@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { CopilotProvider } from '../src/types'
 import { projectStatePath } from './projectState'
@@ -93,7 +93,14 @@ export function saveCopilotProviderLocalEnv(input: {
     assignmentLine('GROVE_COPILOT_MODEL', input.model),
   ]
 
-  writeFileSync(path, `${nextLines.join('\n')}\n`, 'utf8')
+  // The file holds the copilot API key in plaintext: create it owner-only and enforce the
+  // mode afterwards as well (mode only applies when the file is first created).
+  writeFileSync(path, `${nextLines.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 })
+  try {
+    chmodSync(path, 0o600)
+  } catch {
+    // Windows applies the user profile ACL; chmod is best-effort hardening elsewhere.
+  }
   process.env.GROVE_COPILOT_PROVIDER = input.provider
   process.env.GROVE_COPILOT_API_KEY = input.apiKey
   process.env.GROVE_COPILOT_BASE_URL = input.baseUrl

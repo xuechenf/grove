@@ -22,9 +22,15 @@ downloads
 local-files
 scripts/
 *.pem
+*.key
+*.ppk
+*.p12
+*.pfx
 grove_accessKeys.csv
 *_accessKeys.csv
 *.csv
+terraform.tfstate
+terraform.tfstate.*
 *.local
 .env
 .env.*

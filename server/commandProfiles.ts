@@ -54,7 +54,9 @@ export const approvedReadOnlyCommands: CommandProfile[] = [
 const mutatingPatterns = [
   /\bsudo\s+reboot\b/i,
   /\bsystemctl\s+reboot\b/i,
-  /\bsystemctl\s+(restart|start|stop|enable|disable|reload|daemon-reload|kill)\b/i,
+  /\b(reboot|shutdown|halt|poweroff)\b/i,
+  /\binit\s+[0-6]\b/i,
+  /\bsystemctl\s+(restart|start|stop|enable|disable|reload|daemon-reload|kill|poweroff|halt|mask|unmask|edit|set-default)\b/i,
   /\bservice\s+\S+\s+(restart|start|stop|reload)\b/i,
   /\brm\s+/i,
   /\bmv\s+/i,
@@ -70,6 +72,13 @@ const mutatingPatterns = [
   /\bchown\s+/i,
   /\bkill(all)?\s+/i,
   /\bpkill\s+/i,
+  /\bdd\s+/i,
+  /\b(mkfs|mkswap|wipefs)\b/i,
+  /\b(fdisk|sfdisk|parted|partprobe)\b/i,
+  /\b(mount|umount|swapoff|swapon)\s+/i,
+  /\bcrontab\s+/i,
+  /\b(useradd|userdel|usermod|groupadd|groupdel|passwd|chpasswd|visudo)\b/i,
+  /\b(insmod|modprobe|rmmod)\s+/i,
   /\bdocker\s+(run|rm|restart|stop|start|compose\s+up|compose\s+down)\b/i,
   /\b(iptables|ufw|firewall-cmd)\s+/i,
   /\bsed\s+-i\b/i,
@@ -151,8 +160,25 @@ export const readOnlyCommandPrefixes = [
 ]
 
 /**
+ * Split a compound shell line into its simple commands on control operators (`;`, `&&`,
+ * `||`, `|`, newlines). Returns null when the line contains command substitution (backticks
+ * or `$(...)`): substitution can hide an arbitrary command behind any innocent-looking
+ * prefix, so such lines must never be treated as read-only.
+ */
+export function splitSimpleCommands(command: string): string[] | null {
+  if (command.includes('`') || command.includes('$(')) {
+    return null
+  }
+  return command
+    .split(/&&|\|\||[;|\n]/)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+}
+
+/**
  * True when a command is safe for the copilot to execute without an explicit confirmation
- * proposal: not classified mutating, and starting with an approved read-only prefix.
+ * proposal. A chained line is only read-only when EVERY simple command in it is: checking
+ * just the leading prefix let `hostname; shutdown -h now` run without a confirmation.
  */
 export function isReadOnlyCommand(command: string) {
   const trimmed = command.trim()
@@ -164,8 +190,15 @@ export function isReadOnlyCommand(command: string) {
     return false
   }
 
-  const normalized = trimmed
-    .replace(/^timeout\s+\d+[smhd]?\s+/i, '')
-    .replace(/\s+/g, ' ')
-  return readOnlyCommandPrefixes.some((prefix) => normalized.startsWith(prefix))
+  const segments = splitSimpleCommands(trimmed)
+  if (!segments || segments.length === 0) {
+    return false
+  }
+
+  return segments.every((segment) => {
+    const normalized = segment
+      .replace(/^timeout\s+\d+[smhd]?\s+/i, '')
+      .replace(/\s+/g, ' ')
+    return readOnlyCommandPrefixes.some((prefix) => normalized.startsWith(prefix))
+  })
 }

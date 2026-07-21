@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
 import { parse, stringify } from 'yaml'
 import { z } from 'zod'
 import type { VM, VmConfig } from '../src/types'
 import { vms as fixtureVms } from '../src/data/fixtures'
 import { envFlag } from './env'
 import { projectStatePath } from './projectState'
+import { atomicWriteFileSync, quarantineCorruptFile } from './stateFiles'
 
 const providerSchema = z
   .object({
@@ -58,14 +58,24 @@ export function loadInventory(path = defaultInventoryPath()): VmConfig[] {
     return fixtureVmConfigs()
   }
 
-  return validateInventoryText(readFileSync(path, 'utf8'))
+  try {
+    return validateInventoryText(readFileSync(path, 'utf8'))
+  } catch (error) {
+    // A truncated/corrupt inventory must not kill startup: quarantine it and fall back to
+    // the default inventory, exactly as if the file were absent.
+    const quarantined = quarantineCorruptFile(path)
+    console.warn(
+      `Grove: unreadable inventory at ${path} moved to ${quarantined ?? path}; falling back to the default inventory.`,
+      error,
+    )
+    return fixtureVmConfigs()
+  }
 }
 
 export function saveInventory(configs: VmConfig[], path = defaultInventoryPath()) {
   const text = stringify({ vms: configs.map(cleanConfigForInventory) })
   validateInventoryText(text)
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, text, 'utf8')
+  atomicWriteFileSync(path, text)
 }
 
 function cleanConfigForInventory(config: VmConfig): VmConfig {

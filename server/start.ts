@@ -1,10 +1,11 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import type { Duplex } from 'node:stream'
 import { StringDecoder } from 'node:string_decoder'
 import { WebSocket, WebSocketServer } from 'ws'
 import type { ServerEvent } from '../src/types'
 import { createGroveApp } from './app'
-import { generateUiToken, persistUiToken } from './apiToken'
+import { generateUiToken, persistUiToken, timingSafeEqualString } from './apiToken'
 import { envValue, loadLocalEnv } from './env'
 import { GroveStore } from './store'
 import type { CredentialVault } from './credentialVault'
@@ -27,6 +28,8 @@ export interface GroveServerHandle {
   host: string
   /** Local URL the UI is reachable at, e.g. http://127.0.0.1:8787. */
   url: string
+  /** Per-boot UI bearer token; the Electron host hands it to the renderer over IPC. */
+  uiToken: string
   /** Stop accepting connections and close the HTTP server. */
   close: () => Promise<void>
 }
@@ -61,6 +64,9 @@ export function startGroveServer(options: StartGroveServerOptions = {}): Promise
     send(socket, { type: 'snapshot', payload: store.snapshot() })
     const unsubscribe = store.onEvent((event) => send(socket, event))
     socket.on('close', unsubscribe)
+    // ws surfaces protocol violations (e.g. invalid UTF-8 frames) as 'error'; without a
+    // listener the EventEmitter throw would crash the whole backend process.
+    socket.on('error', () => socket.close())
   })
 
   terminalWss.on('connection', async (socket, request) => {
@@ -75,9 +81,19 @@ export function startGroveServer(options: StartGroveServerOptions = {}): Promise
       return
     }
     const vmName = store.getVm(vmId)?.name ?? vmId
+    // Register the socket 'error' listener before any await: ws emits 'error' on protocol
+    // violations (e.g. invalid UTF-8 frames) and an unhandled 'error' crashes the process.
+    socket.on('error', () => socket.close())
 
     try {
       const { session, stream } = await store.openTerminalShell(vmId, { cols, rows })
+      if (socket.readyState !== WebSocket.OPEN) {
+        // The browser went away while the SSH handshake was in flight. The 'close'
+        // listener below is not registered yet, so end the PTY here instead of
+        // leaking the remote shell.
+        stream.end()
+        return
+      }
       send(socket, { type: 'terminal.status', payload: session })
       send(socket, {
         type: 'terminal.data',
@@ -196,8 +212,46 @@ export function startGroveServer(options: StartGroveServerOptions = {}): Promise
     }
   })
 
+  /** Reject a WebSocket upgrade with a plain HTTP response before any handshake happens. */
+  function rejectUpgrade(socket: Duplex, status: string) {
+    socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`)
+    socket.destroy()
+  }
+
+  /**
+   * Browsers always send Origin on WebSocket upgrades; Grove's UI is only ever served from
+   * a loopback origin (the backend itself or the Vite dev server), so anything else is a
+   * remote web page trying to ride the loopback port. Non-browser clients send no Origin.
+   */
+  function isLoopbackOrigin(origin: string | string[] | undefined) {
+    const value = Array.isArray(origin) ? origin[0] : origin
+    if (!value) {
+      return true
+    }
+    try {
+      const { hostname } = new URL(value)
+      return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
+    } catch {
+      return false
+    }
+  }
+
   server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url ?? '/', `http://${host}:${port}`)
+
+    // WebSocket upgrades bypass express, so the UI-token gate runs here: browsers cannot
+    // set x-grove-token on a WebSocket, so the token travels as a query parameter instead
+    // (appended by websocketUrl in src/lib/api.ts). Without this check any web page could
+    // open a cross-origin WebSocket and drive an interactive SSH shell on every VM.
+    if (!isLoopbackOrigin(request.headers.origin)) {
+      rejectUpgrade(socket, '403 Forbidden')
+      return
+    }
+    const upgradeToken = url.searchParams.get('token')
+    if (!upgradeToken || !timingSafeEqualString(upgradeToken, uiToken)) {
+      rejectUpgrade(socket, '401 Unauthorized')
+      return
+    }
 
     if (url.pathname === '/api/events') {
       eventsWss.handleUpgrade(request, socket, head, (ws) => eventsWss.emit('connection', ws, request))
@@ -225,6 +279,7 @@ export function startGroveServer(options: StartGroveServerOptions = {}): Promise
         port: boundPort,
         host,
         url,
+        uiToken,
         close: () =>
           new Promise<void>((resolveClose) => {
             eventsWss.close()
