@@ -284,7 +284,9 @@ export function startGroveServer(options: StartGroveServerOptions = {}): Promise
           new Promise<void>((resolveClose) => {
             eventsWss.close()
             terminalWss.close()
-            server.close(() => resolveClose())
+            server.close(() => {
+              void store.close().finally(resolveClose)
+            })
           }),
       })
     })

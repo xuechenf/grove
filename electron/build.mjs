@@ -20,7 +20,7 @@ await build({
   platform: 'node',
   format: 'cjs',
   // Matches the Node runtime embedded in current Electron; bump alongside the electron devDep.
-  target: 'node20',
+  target: 'node24',
   sourcemap: true,
   // Keep Electron and native/optional addons out of the bundle. They resolve at runtime from
   // node_modules (shipped by electron-builder); ssh2's optional native deps are guarded internally.

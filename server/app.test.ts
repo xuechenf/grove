@@ -264,6 +264,13 @@ vms:
     expect(response.body[0]).toHaveProperty('connection')
   })
 
+  it('reports the active structured-state storage engine', async () => {
+    const { app } = createGroveApp()
+    const response = await request(app).get('/api/storage/status').expect(200)
+
+    expect(response.body).toEqual({ engine: 'memory', schemaVersion: 0, integrity: 'ok' })
+  })
+
   it('uses project-local storage paths by default', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'grove-state-'))
 
@@ -326,13 +333,16 @@ vms:
   it('adds, modifies, and removes VMs in the local inventory', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'grove-'))
     const inventoryPath = join(tempDir, 'inventory.yaml')
+    let store: GroveStore | undefined
 
     try {
       process.env.GROVE_USE_FIXTURES = 'false'
       process.env.GROVE_STATE_DIR = tempDir
       writeFileSync(inventoryPath, 'vms: []\n', 'utf8')
 
-      const { app } = createGroveApp()
+      const createdApp = createGroveApp()
+      const { app } = createdApp
+      store = createdApp.store
       const created = await request(app)
         .post('/api/vms')
         .send({
@@ -349,7 +359,7 @@ vms:
       expect(created.body.connection.port).toBe(2222)
       expect(created.body.lifecycle).toBe('running')
       expect(created.body.health).toBe('warning')
-      expect(readFileSync(inventoryPath, 'utf8')).toContain('keyPath:')
+      expect(readFileSync(inventoryPath, 'utf8')).toContain('vms: []')
 
       const updated = await request(app)
         .patch(`/api/vms/${created.body.id}`)
@@ -369,7 +379,9 @@ vms:
       await request(app).delete(`/api/vms/${created.body.id}`).expect(200)
 
       expect(readFileSync(inventoryPath, 'utf8')).toContain('vms: []')
+      expect(store.snapshot().vms).toHaveLength(0)
     } finally {
+      await store?.close()
       rmSync(tempDir, { recursive: true, force: true })
     }
   })
@@ -377,13 +389,16 @@ vms:
   it('stores agent and keyless VM auth modes without a PEM path', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'grove-'))
     const inventoryPath = join(tempDir, 'inventory.yaml')
+    let store: GroveStore | undefined
 
     try {
       process.env.GROVE_USE_FIXTURES = 'false'
       process.env.GROVE_STATE_DIR = tempDir
       writeFileSync(inventoryPath, 'vms: []\n', 'utf8')
 
-      const { app } = createGroveApp()
+      const createdApp = createGroveApp()
+      const { app } = createdApp
+      store = createdApp.store
       const agent = await request(app)
         .post('/api/vms')
         .send({ ipAddress: '192.168.56.20', user: 'root', port: 22, pemPath: '', useAgent: true })
@@ -402,6 +417,7 @@ vms:
         .expect(400)
       expect(rejected.body).toEqual({ error: 'Enter a PEM file path.' })
     } finally {
+      await store?.close()
       rmSync(tempDir, { recursive: true, force: true })
     }
   })
@@ -716,6 +732,8 @@ vms:
     const inventoryPath = join(tempDir, 'inventory.yaml')
     const appRunnerPath = join(tempDir, 'apprunner.yaml')
 
+    let store: GroveStore | undefined
+    let reloaded: GroveStore | undefined
     try {
       process.env.GROVE_USE_FIXTURES = 'false'
       process.env.GROVE_STATE_DIR = tempDir
@@ -733,7 +751,8 @@ vms:
         'utf8',
       )
 
-      const { app } = createGroveApp(new GroveStore(new AppRunnerSsh()))
+      store = new GroveStore(new AppRunnerSsh())
+      const { app } = createGroveApp(store)
       await request(app)
         .post('/api/vms/vm-edge/app-services')
         .send({
@@ -744,9 +763,9 @@ vms:
         })
         .expect(201)
 
-      expect(readFileSync(appRunnerPath, 'utf8')).toContain('edge-api')
+      expect(existsSync(appRunnerPath)).toBe(false)
 
-      const reloaded = new GroveStore(new AppRunnerSsh())
+      reloaded = new GroveStore(new AppRunnerSsh())
       expect(reloaded.snapshot().vms[0].appServices).toEqual([
         expect.objectContaining({
           name: 'edge-api',
@@ -754,6 +773,8 @@ vms:
         }),
       ])
     } finally {
+      await reloaded?.close()
+      await store?.close()
       rmSync(tempDir, { recursive: true, force: true })
     }
   })

@@ -69,6 +69,8 @@ import { ensureV2StateMigration } from './stateMigration'
 import { InfrastructureManager } from './infrastructureManager'
 import type { TerraformExecutor } from './terraformRunner'
 import { CloudProviderManager, type CloudControlService } from './cloudProvider'
+import { GroveDatabase } from './database'
+import { initializeSqliteState } from './sqliteStateMigration'
 
 const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -763,6 +765,27 @@ export interface GroveStoreOptions {
   credentialVault?: CredentialVault
   terraform?: TerraformExecutor
   cloudControl?: CloudControlService
+  database?: GroveDatabase
+}
+
+function hydratePersistedVm(config: VmConfig, persisted: VM | undefined) {
+  const base = vmFromConfig(config, fixtureVms.find((vm) => vm.id === config.id))
+  if (!persisted) return base
+  return {
+    ...persisted,
+    id: base.id,
+    name: base.name,
+    hostname: base.hostname,
+    ipAddress: base.ipAddress,
+    os: base.os,
+    provider: base.provider,
+    connection: {
+      ...base.connection,
+      lastConnected: persisted.connection.lastConnected,
+      testStatus: persisted.connection.testStatus,
+      fingerprint: persisted.connection.fingerprint,
+    },
+  }
 }
 
 function cloudMachineForAgent(machine: CloudMachine) {
@@ -792,6 +815,7 @@ export class GroveStore implements CopilotToolHost {
   private readonly ssh: SshSessionManager
   private readonly journal: CopilotJournal
   private readonly policy: CopilotPolicy
+  private readonly database?: GroveDatabase
   readonly scopeTokens: ScopeTokenRegistry
   private readonly supervisor: CopilotSupervisor
   private readonly installer: typeof installKimiCli
@@ -827,19 +851,21 @@ export class GroveStore implements CopilotToolHost {
   ) {
     const useFixtures = envFlag('GROVE_USE_FIXTURES')
     this.ssh = ssh
+    this.database = options.database ?? (useFixtures ? undefined : initializeSqliteState().database)
     // In fixtures/test mode the journal is disabled so tests never touch the real .grove.
-    this.journal = options.journal ?? new CopilotJournal(undefined, !useFixtures)
-    this.policy = options.policy ?? new CopilotPolicy({ persist: !useFixtures })
+    this.journal = options.journal ?? new CopilotJournal(undefined, !useFixtures, this.database)
+    this.policy = options.policy ?? new CopilotPolicy({ persist: !useFixtures, database: this.database })
     this.scopeTokens = options.tokens ?? new ScopeTokenRegistry()
     this.supervisor =
       options.supervisor ??
       new CopilotSupervisor({ host: this, tokens: this.scopeTokens, driver: options.driver })
     this.installer = options.installer ?? installKimiCli
-    const configs = loadInventory()
-    ensureV2StateMigration(configs, { persist: !useFixtures })
+    const configs = this.database?.loadVmConfigs() ?? loadInventory()
+    if (!this.database) ensureV2StateMigration(configs, { persist: !useFixtures })
     this.vmConfigs = configs
-    this.vms = this.vmConfigs.map((config) => vmFromConfig(config, fixtureVms.find((vm) => vm.id === config.id)))
-    this.applicationWorkspace = options.applicationWorkspace ?? new ApplicationWorkspace({ persist: !useFixtures })
+    this.vms = this.vmConfigs.map((config) => hydratePersistedVm(config, this.database?.loadVmRuntime(config.id)))
+    this.applicationWorkspace =
+      options.applicationWorkspace ?? new ApplicationWorkspace({ persist: !useFixtures, database: this.database })
     const credentialVault =
       options.credentialVault ?? (useFixtures ? new MemoryCredentialVault() : new EncryptedFileCredentialVault())
     this.credentialManager = new CredentialManager(this.applicationWorkspace, credentialVault, () =>
@@ -864,7 +890,7 @@ export class GroveStore implements CopilotToolHost {
       },
     })
     if (!useFixtures) {
-      const appServices = loadAppRunnerServices()
+      const appServices = this.database?.loadAppRunnerServices() ?? loadAppRunnerServices()
       this.vms = this.vms.map((vm) => ({
         ...vm,
         appServices: appServices
@@ -876,7 +902,15 @@ export class GroveStore implements CopilotToolHost {
       }))
       this.applicationManager.migrateLegacyAppRunnerServices(appServices)
     }
-    this.transfers = useFixtures ? [...initialTransfers] : []
+    this.transfers = useFixtures ? [...initialTransfers] : (this.database?.loadTransfers() ?? [])
+    if (!useFixtures) {
+      this.transfers = this.transfers.map((transfer) => {
+        if (transfer.status !== 'queued' && transfer.status !== 'in_progress') return transfer
+        const interrupted = { ...transfer, status: 'failed' as const, speed: 'Interrupted by a Grove restart.' }
+        this.database?.saveTransfer(interrupted)
+        return interrupted
+      })
+    }
     if (useFixtures) {
       this.messages = [...initialMessages]
       this.proposals = [...initialProposals]
@@ -913,6 +947,11 @@ export class GroveStore implements CopilotToolHost {
 
   copilotInstallState(): CopilotInstallState {
     return this.installState
+  }
+
+  async close() {
+    await this.supervisor.stop()
+    this.database?.close()
   }
 
   private setInstallState(next: Partial<CopilotInstallState>) {
@@ -983,7 +1022,12 @@ export class GroveStore implements CopilotToolHost {
       plans: this.plans,
       runtime: this.supervisor.status(),
       install: this.installState,
+      storage: this.storageStatus(),
     }
+  }
+
+  storageStatus() {
+    return this.database?.status() ?? { engine: 'memory' as const, schemaVersion: 0, integrity: 'ok' as const }
   }
 
   async refreshAllVmInfoOnce() {
@@ -1215,6 +1259,8 @@ export class GroveStore implements CopilotToolHost {
     }
 
     this.vms = [vm, ...this.vms]
+    this.database?.saveVmRuntime(vm)
+    this.database?.saveAuditEvent({ ...activity, vmId: vm.id, actor: 'user' })
     this.publish({ type: 'vm.updated', payload: vm })
     this.publish({
       type: 'activity.created',
@@ -1528,6 +1574,7 @@ export class GroveStore implements CopilotToolHost {
       actor: 'user',
       mutating: classification.mutating,
     })
+    this.database?.saveCommandRun(run)
     if (run.status === 'completed') {
       this.markVmReachable(vmId)
     }
@@ -1546,15 +1593,17 @@ export class GroveStore implements CopilotToolHost {
       actor: 'user',
       mutating: true,
     })
+    this.database?.saveCommandRun(run)
+    const activity = makeActivity('Reboot requested', run.summary, run.status === 'completed' ? 'success' : 'critical')
     const updatedVm: VM = {
       ...vm,
       health: run.status === 'completed' ? 'warning' : 'critical',
-      activity: [
-        makeActivity('Reboot requested', run.summary, run.status === 'completed' ? 'success' : 'critical'),
-        ...vm.activity,
-      ],
+      activity: [activity, ...vm.activity],
     }
     this.replaceVm(updatedVm)
+    const auditEvent: AuditEvent = { ...activity, vmId, actor: 'user', commandRunId: run.id }
+    this.database?.saveAuditEvent(auditEvent)
+    this.publish({ type: 'activity.created', payload: auditEvent })
     return { vm: updatedVm, commandRun: run }
   }
 
@@ -1598,6 +1647,7 @@ export class GroveStore implements CopilotToolHost {
         conflict: input.conflict,
       }
       this.transfers = [transfer, ...this.transfers]
+      this.database?.saveTransfer(transfer)
       this.publish({ type: 'transfer.updated', payload: transfer })
       this.addActivity(
         input.vmId,
@@ -1610,6 +1660,7 @@ export class GroveStore implements CopilotToolHost {
         const finished = await this.ssh.transferFile({ vm, ...input })
         const completed: TransferJob = { ...finished, id: transfer.id }
         this.transfers = this.transfers.map((item) => (item.id === transfer.id ? completed : item))
+        this.database?.saveTransfer(completed)
         this.publish({ type: 'transfer.updated', payload: completed })
         this.addActivity(
           input.vmId,
@@ -1622,6 +1673,7 @@ export class GroveStore implements CopilotToolHost {
         const message = error instanceof Error ? error.message : 'Transfer failed.'
         const failed: TransferJob = { ...transfer, status: 'failed', speed: message }
         this.transfers = this.transfers.map((item) => (item.id === transfer.id ? failed : item))
+        this.database?.saveTransfer(failed)
         this.publish({ type: 'transfer.updated', payload: failed })
         this.addActivity(
           input.vmId,
@@ -1653,6 +1705,7 @@ export class GroveStore implements CopilotToolHost {
       conflict: input.conflict,
     }
     this.transfers = [transfer, ...this.transfers]
+    this.database?.saveTransfer(transfer)
     this.publish({ type: 'transfer.updated', payload: transfer })
     this.addActivity(
       input.vmId,
@@ -2588,6 +2641,7 @@ export class GroveStore implements CopilotToolHost {
   }
 
   private recordCommandActivity(vmId: string, title: string, run: CommandRun, proposalId?: string) {
+    this.database?.saveCommandRun(run)
     this.addActivity(
       vmId,
       makeActivity(title, run.summary, run.status === 'failed' ? 'critical' : 'success'),
@@ -2846,7 +2900,8 @@ export class GroveStore implements CopilotToolHost {
       return
     }
 
-    saveInventory(this.vmConfigs)
+    if (this.database) this.database.saveVmConfigs(this.vmConfigs)
+    else saveInventory(this.vmConfigs)
   }
 
   private persistAppRunnerServices() {
@@ -2854,11 +2909,14 @@ export class GroveStore implements CopilotToolHost {
       return
     }
 
-    saveAppRunnerServices(this.vms.flatMap((vm) => vm.appServices))
+    const services = this.vms.flatMap((vm) => vm.appServices)
+    if (this.database) this.database.saveAppRunnerServices(services)
+    else saveAppRunnerServices(services)
   }
 
   private replaceVm(updatedVm: VM) {
     this.vms = this.vms.map((vm) => (vm.id === updatedVm.id ? updatedVm : vm))
+    this.database?.saveVmRuntime(updatedVm)
     this.publish({ type: 'vm.updated', payload: updatedVm })
   }
 
@@ -2874,14 +2932,11 @@ export class GroveStore implements CopilotToolHost {
       activity: [activity, ...vm.activity],
     }
     this.replaceVm(updatedVm)
+    const auditEvent: AuditEvent = { ...activity, vmId, actor, ...links }
+    this.database?.saveAuditEvent(auditEvent)
     this.publish({
       type: 'activity.created',
-      payload: {
-        ...activity,
-        vmId,
-        actor,
-        ...links,
-      },
+      payload: auditEvent,
     })
   }
 

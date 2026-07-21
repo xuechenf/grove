@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import {
   CheckCircle2,
+  Database,
   Folder,
   FileUp,
   KeyRound,
@@ -26,6 +27,7 @@ import type {
   CredentialProfileInput,
   CredentialProfileKind,
   GroveSettings,
+  GroveStorageStatus,
   AwsCredentialCsvImport,
 } from '../types'
 import { IconButton } from './IconButton'
@@ -113,6 +115,7 @@ function newCredentialInput(kind: CredentialProfileKind = 'ssh'): CredentialProf
 interface GeneralSettingsPanelProps {
   open: boolean
   settings: GroveSettings
+  storage: GroveStorageStatus
   providerStatus: CopilotProviderStatus
   theme: AppTheme
   onOpenChange: (open: boolean) => void
@@ -138,6 +141,7 @@ function optionFor(provider: CopilotProvider) {
 export function GeneralSettingsPanel({
   open,
   settings,
+  storage,
   providerStatus,
   theme,
   onOpenChange,
@@ -394,6 +398,37 @@ export function GeneralSettingsPanel({
                   {workspaceSaving ? 'Moving' : 'Save location'}
                 </button>
               </div>
+            </section>
+
+            <section className="grid gap-3 border-t border-slate-200 pt-4">
+              <div className="flex items-center gap-2">
+                <Database className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                <h2 className="text-xs font-semibold uppercase text-slate-500">Local database</h2>
+                <span className="ml-auto rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                  {storage.integrity}
+                </span>
+              </div>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded border border-slate-200 bg-slate-50 p-3 text-xs">
+                <dt className="text-slate-500">Engine</dt>
+                <dd className="font-medium text-slate-800">{storage.engine === 'sqlite' ? 'SQLite' : 'In-memory fixtures'}</dd>
+                <dt className="text-slate-500">Schema</dt>
+                <dd className="font-medium text-slate-800">v{storage.schemaVersion}</dd>
+                {storage.journalMode ? (
+                  <>
+                    <dt className="text-slate-500">Journal</dt>
+                    <dd className="font-medium uppercase text-slate-800">{storage.journalMode}</dd>
+                  </>
+                ) : null}
+                {storage.databasePath ? (
+                  <>
+                    <dt className="text-slate-500">File</dt>
+                    <dd className="break-all font-mono text-slate-700">{storage.databasePath}</dd>
+                  </>
+                ) : null}
+              </dl>
+              <p className="text-xs leading-5 text-slate-500">
+                Structured Grove state is stored in SQLite. Credential secrets, private keys, source code, artifacts, logs, and Terraform state remain outside the database.
+              </p>
             </section>
 
             <section className="grid gap-3 border-t border-slate-200 pt-4">

@@ -289,6 +289,10 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
     response.json(store.groveSettings())
   })
 
+  app.get('/api/storage/status', (_request, response) => {
+    response.json(store.storageStatus())
+  })
+
   app.patch('/api/settings/workspace', (request, response) => {
     const body = workspaceRelocationSchema.parse(request.body)
     response.json(store.relocateWorkspace(body.workspacePath))

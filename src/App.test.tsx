@@ -194,6 +194,9 @@ describe('Grove VM console', () => {
     await user.click(screen.getByRole('button', { name: 'Open Grove settings' }))
     const dialog = screen.getByRole('dialog', { name: 'Grove settings' })
 
+    expect(within(dialog).getByRole('heading', { name: 'Local database' })).toBeInTheDocument()
+    expect(within(dialog).getByText('In-memory fixtures')).toBeInTheDocument()
+
     await user.click(within(dialog).getByRole('button', { name: /GLM-CN/i }))
     expect(within(dialog).getByLabelText('Base URL')).toHaveValue('https://open.bigmodel.cn/api/coding/paas/v4')
     expect(within(dialog).getByLabelText('Model')).toHaveValue('glm-5.2')

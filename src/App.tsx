@@ -96,6 +96,7 @@ import type {
   GroveApplication,
   GroveApplicationInput,
   GroveSettings,
+  GroveStorageStatus,
   TerraformRuntimeStatus,
   CredentialProfileInput,
   ActivityEvent,
@@ -151,6 +152,11 @@ const fallbackGroveSettings: GroveSettings = {
   workspacePath: fallbackLocalDefaults.workspacePath,
   workspaceStatus: 'healthy',
   credentialProfiles: [],
+}
+const fallbackStorageStatus: GroveStorageStatus = {
+  engine: 'memory',
+  schemaVersion: 0,
+  integrity: 'ok',
 }
 const fallbackTerraformStatus: TerraformRuntimeStatus = {
   available: false,
@@ -440,6 +446,7 @@ function App() {
   const [copilotRuntime, setCopilotRuntime] = useState<CopilotRuntimeStatus>({ driver: 'mock', state: 'disabled' })
   const [copilotInstall, setCopilotInstall] = useState<CopilotInstallState>({ status: 'idle', log: '' })
   const [providerStatus, setProviderStatus] = useState<CopilotProviderStatus>(initialProviderStatus)
+  const [storageStatus, setStorageStatus] = useState<GroveStorageStatus>(fallbackStorageStatus)
   const [theme, setTheme] = useState<AppTheme>(initialTheme)
   const deltaBufferRef = useRef<Map<string, string>>(new Map())
   const deltaFrameRef = useRef<number | null>(null)
@@ -546,6 +553,7 @@ function App() {
         setPlans(snapshot.plans ?? [])
         setCopilotRuntime(snapshot.runtime ?? { driver: 'mock', state: 'disabled' })
         setCopilotInstall(snapshot.install ?? { status: 'idle', log: '' })
+        setStorageStatus(snapshot.storage ?? fallbackStorageStatus)
         setSelectedVmId((current) => selectAvailableVm(current, snapshot.vms))
         setSelectedApplicationId((current) =>
           snapshot.applications?.some((application) => application.id === current)
@@ -597,6 +605,7 @@ function App() {
           setPlans(event.payload.plans ?? [])
           setCopilotRuntime(event.payload.runtime ?? { driver: 'mock', state: 'disabled' })
           setCopilotInstall(event.payload.install ?? { status: 'idle', log: '' })
+          setStorageStatus(event.payload.storage ?? fallbackStorageStatus)
           // A snapshot means the socket (re)connected to a fresh backend view, so any
           // busy flags from before the gap are stale (the terminal progress event was
           // missed). A genuinely running turn re-marks itself on its next progress event.
@@ -2027,6 +2036,7 @@ function App() {
         key={generalSettingsOpen ? 'settings-open' : 'settings-closed'}
         open={generalSettingsOpen}
         settings={groveSettings}
+        storage={storageStatus}
         providerStatus={providerStatus}
         theme={theme}
         onOpenChange={setGeneralSettingsOpen}

@@ -487,6 +487,16 @@ export interface GroveSettings {
   legacyAppRunnerMigrationCompletedAt?: string
 }
 
+export interface GroveStorageStatus {
+  engine: 'sqlite' | 'memory'
+  databasePath?: string
+  schemaVersion: number
+  integrity: 'ok' | 'error'
+  journalMode?: string
+  migratedAt?: string
+  backupDirectory?: string
+}
+
 export interface ProcessInfo {
   pid: number
   command: string
@@ -792,6 +802,7 @@ export interface AppSnapshot {
   runtime: CopilotRuntimeStatus
   /** Current kimi-code install progress, so it survives a WS reconnect and reaches new clients. */
   install: CopilotInstallState
+  storage?: GroveStorageStatus
 }
 
 export interface CopilotDeltaEvent {

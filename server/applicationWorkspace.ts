@@ -23,6 +23,7 @@ import type {
 } from '../src/types'
 import { projectStatePath } from './projectState'
 import { atomicWriteFileSync, quarantineCorruptFile } from './stateFiles'
+import type { GroveDatabase } from './database'
 
 const applicationSourceSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('local'), path: z.string().min(1) }),
@@ -189,6 +190,9 @@ export interface ApplicationWorkspaceOptions {
   persist?: boolean
   settingsPath?: string
   workspacePath?: string
+  database?: GroveDatabase
+  /** Load legacy YAML without creating, rewriting, or quarantining anything. */
+  readOnly?: boolean
 }
 
 function nowIso() {
@@ -250,16 +254,20 @@ function isDirectoryEmpty(path: string) {
 export class ApplicationWorkspace {
   private readonly persist: boolean
   private readonly settingsPath: string
+  private readonly database?: GroveDatabase
+  private readonly readOnly: boolean
   private settingsState: GroveSettings
   private applicationsState: GroveApplication[] = []
 
   constructor(options: ApplicationWorkspaceOptions = {}) {
     this.persist = options.persist ?? true
     this.settingsPath = resolve(options.settingsPath ?? projectStatePath('settings.yaml'))
+    this.database = options.database
+    this.readOnly = options.readOnly ?? false
     this.settingsState = this.loadSettings(options.workspacePath)
     if (this.persist) {
-      this.ensureWorkspace()
-      this.applicationsState = this.scanApplications()
+      if (!this.readOnly) this.ensureWorkspace()
+      this.applicationsState = this.database ? this.database.loadApplications() : this.scanApplications()
     }
   }
 
@@ -322,9 +330,11 @@ export class ApplicationWorkspace {
     if (this.persist) {
       mkdirSync(join(appDir, '.grove', 'versions'), { recursive: true })
       mkdirSync(application.managedSourcePath, { recursive: true })
-      this.writeApplication(application)
     }
     this.applicationsState = [application, ...this.applicationsState]
+    if (this.persist) {
+      this.writeApplication(application)
+    }
     return structuredClone(application)
   }
 
@@ -359,6 +369,7 @@ export class ApplicationWorkspace {
     }
     if (this.persist) {
       rmSync(this.applicationDirectory(application), { recursive: true, force: true })
+      this.database?.deleteApplication(applicationId)
     }
     this.applicationsState = this.applicationsState.filter((item) => item.id !== applicationId)
   }
@@ -407,7 +418,15 @@ export class ApplicationWorkspace {
       renameSync(stagingPath, nextPath)
       this.settingsState = { ...this.settingsState, workspacePath: nextPath, workspaceStatus: 'healthy' }
       this.persistSettings()
-      this.applicationsState = this.scanApplications()
+      if (this.database) {
+        this.applicationsState = this.applicationsState.map((application) => ({
+          ...application,
+          managedSourcePath: join(nextPath, application.slug, 'source'),
+        }))
+        this.applicationsState.forEach((application) => this.writeApplication(application))
+      } else {
+        this.applicationsState = this.scanApplications()
+      }
       return this.settings()
     } catch (error) {
       rmSync(stagingPath, { recursive: true, force: true })
@@ -449,9 +468,14 @@ export class ApplicationWorkspace {
   }
 
   private loadSettings(workspacePath?: string) {
+    const databaseSettings = this.database?.loadSettings()
+    if (databaseSettings) {
+      const path = resolve(workspacePath ?? databaseSettings.workspacePath)
+      return { ...databaseSettings, workspacePath: path, workspaceStatus: workspaceStatus(path) }
+    }
     if (!this.persist || !existsSync(this.settingsPath)) {
       const settings = defaultSettings(workspacePath)
-      if (this.persist) {
+      if (this.persist && !this.readOnly) {
         this.settingsState = settings
         this.persistSettings()
       }
@@ -461,6 +485,7 @@ export class ApplicationWorkspace {
     try {
       parsed = settingsSchema.parse(parse(readFileSync(this.settingsPath, 'utf8'))) as GroveSettings
     } catch (error) {
+      if (this.readOnly) throw error
       // A truncated/corrupt settings file must not kill startup: quarantine it and boot
       // with defaults (a fresh settings.yaml is written below by ensureWorkspace).
       const quarantined = quarantineCorruptFile(this.settingsPath)
@@ -484,7 +509,11 @@ export class ApplicationWorkspace {
   }
 
   private persistSettings() {
-    if (!this.persist) {
+    if (!this.persist || this.readOnly) {
+      return
+    }
+    if (this.database) {
+      this.database.saveSettings(settingsSchema.parse(this.settingsState) as GroveSettings)
       return
     }
     const text = stringify(settingsSchema.parse(this.settingsState))
@@ -511,6 +540,7 @@ export class ApplicationWorkspace {
           const parsed = applicationFileSchema.parse(parse(readFileSync(metadataPath, 'utf8')))
           return [normalizeApplication(parsed.application as GroveApplication, appDir)]
         } catch (error) {
+          if (this.readOnly) throw error
           // One corrupt application.yaml must not kill the whole scan: quarantine it and
           // skip the application instead of throwing during startup.
           const quarantined = quarantineCorruptFile(metadataPath)
@@ -525,6 +555,12 @@ export class ApplicationWorkspace {
   }
 
   private writeApplication(application: GroveApplication) {
+    if (this.readOnly) return
+    if (this.database) {
+      const position = Math.max(0, this.applicationsState.findIndex((item) => item.id === application.id))
+      this.database.saveApplication(application, position)
+      return
+    }
     const metadataPath = join(this.applicationDirectory(application), '.grove', 'application.yaml')
     const payload = applicationFileSchema.parse({ schemaVersion: 2, application })
     atomicWriteFileSync(metadataPath, stringify(payload))

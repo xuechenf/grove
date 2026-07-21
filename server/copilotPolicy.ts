@@ -4,8 +4,9 @@ import { parse, stringify } from 'yaml'
 import type { CopilotScope } from '../src/types'
 import { isReadOnlyCommand, splitSimpleCommands } from './commandProfiles'
 import { projectStatePath } from './projectState'
+import type { GroveDatabase } from './database'
 
-interface PolicyRule {
+export interface PolicyRule {
   scope: CopilotScope
   prefix: string
 }
@@ -19,10 +20,12 @@ export class CopilotPolicy {
   private rules: PolicyRule[]
   private readonly path: string
   private readonly persist: boolean
+  private readonly database?: GroveDatabase
 
-  constructor(options: { path?: string; persist?: boolean } = {}) {
+  constructor(options: { path?: string; persist?: boolean; database?: GroveDatabase } = {}) {
     this.path = options.path ?? projectStatePath('copilot', 'policy.yaml')
     this.persist = options.persist ?? true
+    this.database = options.database
     this.rules = this.load()
   }
 
@@ -61,6 +64,9 @@ export class CopilotPolicy {
   }
 
   private load(): PolicyRule[] {
+    if (this.database) {
+      return this.database.loadPolicyRules()
+    }
     if (!this.persist || !existsSync(this.path)) {
       return []
     }
@@ -74,6 +80,10 @@ export class CopilotPolicy {
 
   private save() {
     if (!this.persist) {
+      return
+    }
+    if (this.database) {
+      this.database.savePolicyRules(this.rules)
       return
     }
     mkdirSync(dirname(this.path), { recursive: true })

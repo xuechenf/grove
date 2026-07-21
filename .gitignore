@@ -31,6 +31,7 @@ grove_accessKeys.csv
 *.csv
 terraform.tfstate
 terraform.tfstate.*
+grove.db*
 *.local
 .env
 .env.*

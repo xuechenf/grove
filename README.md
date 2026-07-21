@@ -14,6 +14,8 @@ The desktop app runs the backend locally and serves the UI from the packaged app
 
 Version 0.3.2 is the post-bug-bash reliability release. It hardens local API and WebSocket authentication, atomic state recovery, concurrent application builds and deployments, SSH/SFTP session handling, and cloud-provider pagination and cleanup. It also fixes narrow-panel cloud layouts, makes all-traffic firewall rules readable, and lets VM setup explicitly use a private key, the SSH agent, or no credential.
 
+The upcoming 0.4.0 release moves Grove's structured control-plane state to a local SQLite database with transactional updates, WAL journaling, integrity checks, online backups, and an automatic one-time import from v0.3 YAML and Copilot JSONL state. Credential secrets and their encrypted vault, private keys, source trees, build artifacts, logs, and Terraform state remain outside SQLite.
+
 ## Requirements
 
 For the desktop app:

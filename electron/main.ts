@@ -10,6 +10,8 @@ const devServerUrl = process.env.VITE_DEV_SERVER_URL
 
 let serverHandle: GroveServerHandle | undefined
 let mainWindow: BrowserWindow | undefined
+let serverShutdownStarted = false
+let serverShutdownFinished = false
 
 ipcMain.handle('grove:ui-token', (event) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) {
@@ -130,7 +132,24 @@ if (!app.requestSingleInstanceLock()) {
     }
   })
 
-  app.on('will-quit', () => {
-    void serverHandle?.close()
+  app.on('before-quit', (event) => {
+    if (!serverHandle || serverShutdownFinished) {
+      return
+    }
+
+    // Electron does not wait for async work started from `will-quit`. Hold the first quit
+    // request until SQLite has checkpointed its WAL and the backend has released its files,
+    // then issue a second quit request that is allowed through by serverShutdownFinished.
+    event.preventDefault()
+    if (serverShutdownStarted) {
+      return
+    }
+
+    serverShutdownStarted = true
+    void serverHandle.close().finally(() => {
+      serverHandle = undefined
+      serverShutdownFinished = true
+      app.quit()
+    })
   })
 }

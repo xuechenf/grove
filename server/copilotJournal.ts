@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from
 import { join } from 'node:path'
 import type { ActionProposal, CopilotMessage, CopilotPlanState, CopilotScope, CopilotToolCall } from '../src/types'
 import { projectStatePath } from './projectState'
+import type { GroveDatabase } from './database'
 
 /**
  * Append-only operation journal, one JSONL file per scope. This is the durable source of
@@ -32,10 +33,12 @@ function scopeFileName(scope: CopilotScope) {
 export class CopilotJournal {
   private readonly dir: string
   private readonly enabled: boolean
+  private readonly database?: GroveDatabase
 
-  constructor(dir: string = projectStatePath('copilot', 'journal'), enabled = true) {
+  constructor(dir: string = projectStatePath('copilot', 'journal'), enabled = true, database?: GroveDatabase) {
     this.dir = dir
     this.enabled = enabled
+    this.database = database
   }
 
   private ensureDir() {
@@ -44,6 +47,13 @@ export class CopilotJournal {
 
   private append(record: JournalRecord) {
     if (!this.enabled) {
+      return
+    }
+    if (this.database) {
+      if (record.kind === 'message') this.database.recordCopilotMessage(record.scope, record.data, record.at)
+      else if (record.kind === 'toolcall') this.database.recordCopilotToolCall(record.scope, record.data, record.at)
+      else if (record.kind === 'proposal') this.database.recordCopilotProposal(record.scope, record.data, record.at)
+      else this.database.recordCopilotPlan(record.scope, record.data, record.at)
       return
     }
     this.ensureDir()
@@ -79,6 +89,9 @@ export class CopilotJournal {
   }
 
   private readScope(scope: CopilotScope): JournalRecord[] {
+    if (this.database) {
+      return this.database.copilotRecords(scope) as JournalRecord[]
+    }
     const path = join(this.dir, scopeFileName(scope))
     if (!existsSync(path)) {
       return []
@@ -88,6 +101,15 @@ export class CopilotJournal {
 
   /** Aggregate state across all scope files, with in-flight work reconciled. */
   load(): JournalState {
+    if (this.database) {
+      const state = this.database.loadCopilotState()
+      return {
+        messages: state.messages.map(reconcileMessage).sort(byCreatedAt),
+        toolCalls: state.toolCalls.map(reconcileToolCall).sort(byCreatedAt),
+        proposals: state.proposals.map(reconcileProposal).sort(byCreatedAt),
+        plans: state.plans.sort(byCreatedAt),
+      }
+    }
     if (!this.enabled || !existsSync(this.dir)) {
       return { messages: [], toolCalls: [], proposals: [], plans: [] }
     }
