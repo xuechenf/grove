@@ -111,9 +111,13 @@ terminal.
 
 ## Settings
 
-Use the bottom-left Grove settings button to configure the workspace, credentials, copilot provider, and app theme. AWS and Alibaba Cloud access-key CSV exports can be imported directly; Grove writes only the profile metadata to settings and keeps secret values in its encrypted credential vault.
+Use the bottom-left Grove settings button to configure the workspace, credentials, copilot provider, and app theme. AWS and Alibaba Cloud access-key CSV exports can be imported directly. Azure profiles use a tenant ID, client ID, subscription ID, and write-only client secret. Grove writes only profile metadata to settings and keeps secret values in its encrypted credential vault.
 
-When a VM's SSH address matches a discovered AWS EC2 or Alibaba Cloud ECS instance, its Overview uses the provider's live machine state and CloudWatch or CloudMonitor CPU/network metrics. Unmatched machines continue to use status and metrics sampled from the host over SSH. Memory, disk, service, process, and uptime details remain host-reported.
+Applications can assign one fully-qualified hostname through a Name.com credential profile. Grove creates or updates an A record for a VM where the application is already deployed, persists the exact Name.com record ID it owns, and only removes that recorded entry. DNS points the hostname to the VM; exposing the application on port 80/443 and configuring TLS remain separate runtime tasks.
+
+For Azure, open a new Azure credential profile to get copyable PowerShell onboarding commands. The service principal needs subscription-scoped `Monitoring Reader`, `Virtual Machine Contributor`, and `Network Contributor` roles. Grove does not create the identity or assign roles, and it does not need `Owner` access.
+
+When a VM's SSH address matches a discovered AWS EC2, Azure VM, or Alibaba Cloud ECS instance, its Overview uses the provider's live machine state and CloudWatch, Azure Monitor, or CloudMonitor CPU/network metrics. Unmatched machines continue to use status and metrics sampled from the host over SSH. Memory, disk, service, process, and uptime details remain host-reported.
 
 ## Scripts
 

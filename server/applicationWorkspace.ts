@@ -140,6 +140,16 @@ const applicationEnvironmentSchema = z.object({
   operations: z.array(infrastructureOperationSchema),
 })
 
+const applicationDomainSchema = z.object({
+  hostname: z.string().min(1),
+  nameComCredentialProfileId: z.string().min(1),
+  vmId: z.string().min(1),
+  dnsStatus: z.enum(['pending', 'ready', 'failed']),
+  dnsRecordId: z.string().optional(),
+  dnsDetail: z.string().optional(),
+  updatedAt: z.string().min(1),
+})
+
 const applicationSchema = z.object({
   id: z.string().min(1),
   slug: z.string().min(1),
@@ -156,6 +166,7 @@ const applicationSchema = z.object({
   deployments: z.array(deploymentSchema),
   instances: z.array(instanceSchema),
   environments: z.array(applicationEnvironmentSchema).default([]),
+  domain: applicationDomainSchema.optional(),
 })
 
 const applicationFileSchema = z.object({

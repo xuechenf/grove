@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { GroveApplication, GroveSettings, TransferJob, VmConfig } from '../src/types'
 import { GroveDatabase } from './database'
@@ -73,6 +74,15 @@ function application(root: string): GroveApplication {
         updatedAt: '2026-07-21T00:01:20.000Z',
       },
     ],
+    domain: {
+      hostname: 'one.example.com',
+      nameComCredentialProfileId: 'credential-namecom',
+      vmId: 'vm-one',
+      dnsStatus: 'ready',
+      dnsRecordId: '42',
+      dnsDetail: 'one.example.com points to 203.0.113.10 with TTL 300.',
+      updatedAt: '2026-07-21T00:01:30.000Z',
+    },
     environments: [
       {
         id: 'environment-one',
@@ -194,5 +204,28 @@ describe('GroveDatabase', () => {
     expect(backup.quickCheck()).toBe('ok')
     backup.close()
     expect(readFileSync(backupPath).length).toBeGreaterThan(0)
+  })
+
+  it('adds application domain storage to an existing version-one database', () => {
+    const root = temporaryDirectory()
+    const path = join(root, 'grove.db')
+    const legacy = new DatabaseSync(path)
+    legacy.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL) STRICT;
+      INSERT INTO schema_migrations (version, applied_at) VALUES (1, CURRENT_TIMESTAMP);
+      CREATE TABLE applications (
+        id TEXT PRIMARY KEY, position INTEGER NOT NULL, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+        description TEXT, source_json TEXT NOT NULL, managed_source_path TEXT NOT NULL,
+        configuration_json TEXT NOT NULL, health TEXT NOT NULL, active_version_id TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      ) STRICT;
+    `)
+    legacy.close()
+
+    const migrated = new GroveDatabase(path)
+    expect(migrated.status().schemaVersion).toBe(2)
+    migrated.saveApplication(application(root))
+    expect(migrated.loadApplications()[0]?.domain?.dnsRecordId).toBe('42')
+    migrated.close()
   })
 })

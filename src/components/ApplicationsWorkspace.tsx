@@ -9,6 +9,7 @@ import {
   Code2,
   FileClock,
   FileText,
+  Globe2,
   LoaderCircle,
   Pencil,
   Play,
@@ -16,6 +17,7 @@ import {
   Rocket,
   Server,
   Settings2,
+  Trash2,
   X,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -26,6 +28,7 @@ import type {
   ApplicationInstanceStatus,
   ApplicationVersionStatus,
   ApplicationEnvironmentInput,
+  ApplicationDomainInput,
   CredentialProfile,
   GroveApplication,
   VM,
@@ -34,7 +37,7 @@ import type {
 import { EnvironmentsPanel } from './EnvironmentsPanel'
 import { IconButton } from './IconButton'
 
-type ApplicationTab = 'overview' | 'configuration' | 'environments' | 'deployments' | 'versions' | 'vms' | 'logs'
+type ApplicationTab = 'overview' | 'configuration' | 'domain' | 'environments' | 'deployments' | 'versions' | 'vms' | 'logs'
 
 interface ApplicationsWorkspaceProps {
   application?: GroveApplication
@@ -49,6 +52,8 @@ interface ApplicationsWorkspaceProps {
   onDeploy: (versionId: string, vmIds: string[], environment: string) => Promise<void>
   onLoadLogs: (vmId: string) => Promise<string[]>
   onOpenVm: (vmId: string) => void
+  onSaveDomain: (input: ApplicationDomainInput) => Promise<void>
+  onRemoveDomain: () => Promise<void>
   onCreateEnvironment: (input: ApplicationEnvironmentInput) => Promise<void>
   onPlanEnvironment: (environmentId: string, destroy: boolean) => Promise<void>
   onApplyEnvironment: (environmentId: string, planOperationId: string) => Promise<void>
@@ -57,6 +62,7 @@ interface ApplicationsWorkspaceProps {
 const applicationTabs: Array<{ value: ApplicationTab; label: string; icon: typeof Activity }> = [
   { value: 'overview', label: 'Overview', icon: Activity },
   { value: 'configuration', label: 'Configuration', icon: Settings2 },
+  { value: 'domain', label: 'Domain', icon: Globe2 },
   { value: 'environments', label: 'Environments', icon: Cloud },
   { value: 'deployments', label: 'Deployments', icon: Rocket },
   { value: 'versions', label: 'Versions', icon: FileClock },
@@ -80,6 +86,8 @@ const statusClasses: Record<string, string> = {
   stopped: 'border-slate-200 bg-slate-50 text-slate-600',
   failed: 'border-rose-200 bg-rose-50 text-rose-700',
   rolled_back: 'border-rose-200 bg-rose-50 text-rose-700',
+  ready: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  pending: 'border-blue-200 bg-blue-50 text-blue-700',
 }
 
 export function ApplicationsWorkspace({
@@ -95,6 +103,8 @@ export function ApplicationsWorkspace({
   onDeploy,
   onLoadLogs,
   onOpenVm,
+  onSaveDomain,
+  onRemoveDomain,
   onCreateEnvironment,
   onPlanEnvironment,
   onApplyEnvironment,
@@ -208,6 +218,15 @@ export function ApplicationsWorkspace({
       <div className="min-h-0 flex-1 overflow-auto p-5">
         {activeTab === 'overview' ? <Overview application={application} vms={vms} onOpenVm={onOpenVm} onSelectTab={setActiveTab} /> : null}
         {activeTab === 'configuration' ? <Configuration application={application} onEdit={onEdit} /> : null}
+        {activeTab === 'domain' ? (
+          <Domain
+            application={application}
+            vms={vms}
+            credentialProfiles={credentialProfiles}
+            onSave={onSaveDomain}
+            onRemove={onRemoveDomain}
+          />
+        ) : null}
         {activeTab === 'environments' ? (
           <EnvironmentsPanel
             application={application}
@@ -274,10 +293,18 @@ function Overview({
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.8fr)]">
       <div className="grid gap-4">
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Metric label="Application status" value={humanize(application.health)} detail={`${healthyInstances}/${application.instances.length} targets healthy`} status={application.health} />
           <Metric label="Active version" value={activeVersionLabel(application)} detail={latestVersion ? `Latest build ${formatRelative(latestVersion.createdAt)}` : 'No builds yet'} />
           <Metric label="Deployed VMs" value={String(application.instances.length)} detail={`${application.deployments.length} deployment records`} />
+          <button type="button" onClick={() => onSelectTab('domain')} className="text-left">
+            <Metric
+              label="Domain"
+              value={application.domain?.hostname ?? 'Not set'}
+              detail={application.domain?.dnsDetail ?? 'Configure a Name.com A record'}
+              status={application.domain?.dnsStatus}
+            />
+          </button>
         </div>
         <Panel title="Deployed virtual machines" detail="Observed state for every application target" action="View all" onAction={() => onSelectTab('vms')}>
           {application.instances.length ? (
@@ -320,6 +347,168 @@ function Overview({
             <Definition label="Remote root" value={`~/grove/${application.slug}`} mono />
             <Definition label="Service" value={`grove-${application.slug}.service`} mono />
           </dl>
+        </Panel>
+      </div>
+    </div>
+  )
+}
+
+function Domain({
+  application,
+  vms,
+  credentialProfiles,
+  onSave,
+  onRemove,
+}: {
+  application: GroveApplication
+  vms: VM[]
+  credentialProfiles: CredentialProfile[]
+  onSave: (input: ApplicationDomainInput) => Promise<void>
+  onRemove: () => Promise<void>
+}) {
+  const nameComProfiles = credentialProfiles.filter((profile) => profile.kind === 'name.com')
+  const deployedVms = application.instances.flatMap((instance) => {
+    const vm = vms.find((candidate) => candidate.id === instance.vmId)
+    return vm ? [vm] : []
+  })
+  const defaultProfile =
+    application.domain?.nameComCredentialProfileId ??
+    nameComProfiles.find((profile) => profile.isDefault)?.id ??
+    nameComProfiles[0]?.id ??
+    ''
+  const [hostname, setHostname] = useState(application.domain?.hostname ?? '')
+  const [profileId, setProfileId] = useState(defaultProfile)
+  const [vmId, setVmId] = useState(application.domain?.vmId ?? deployedVms[0]?.id ?? '')
+  const [busy, setBusy] = useState<'save' | 'remove'>()
+  const [message, setMessage] = useState<string>()
+  const targetVm = deployedVms.find((vm) => vm.id === vmId)
+
+  async function save() {
+    setBusy('save')
+    setMessage(undefined)
+    try {
+      await onSave({ hostname: hostname.trim(), nameComCredentialProfileId: profileId, vmId })
+      setMessage('Name.com DNS is configured.')
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'Unable to configure the domain.')
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm(`Remove Grove's DNS record for ${application.domain?.hostname}?`)) return
+    setBusy('remove')
+    setMessage(undefined)
+    try {
+      await onRemove()
+      setHostname('')
+      setMessage('The Grove-owned Name.com record was removed.')
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'Unable to remove the domain.')
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
+      <Panel title="Application domain" detail="Create and maintain one Name.com A record for this application">
+        <div className="grid gap-5 p-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="grid gap-1 text-xs font-medium text-slate-600 md:col-span-2">
+              Fully-qualified hostname
+              <input
+                value={hostname}
+                onChange={(event) => setHostname(event.target.value)}
+                placeholder="app.example.com"
+                className="field-control"
+                autoCapitalize="none"
+                autoCorrect="off"
+              />
+            </label>
+            <label className="grid gap-1 text-xs font-medium text-slate-600">
+              Name.com credential
+              <select value={profileId} onChange={(event) => setProfileId(event.target.value)} className="field-control">
+                <option value="">Select a credential</option>
+                {nameComProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id} disabled={!profile.secretConfigured}>
+                    {profile.name}{profile.isDefault ? ' · default' : ''}{!profile.secretConfigured ? ' · token missing' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1 text-xs font-medium text-slate-600">
+              Deployed VM
+              <select value={vmId} onChange={(event) => setVmId(event.target.value)} className="field-control">
+                <option value="">Select a deployed VM</option>
+                {deployedVms.map((vm) => <option key={vm.id} value={vm.id}>{vm.name} · {vm.ipAddress}</option>)}
+              </select>
+            </label>
+          </div>
+
+          {nameComProfiles.length === 0 ? (
+            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Add a Name.com credential in Grove Settings before configuring DNS.
+            </div>
+          ) : null}
+          {deployedVms.length === 0 ? (
+            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Deploy this application to a VM before assigning a domain.
+            </div>
+          ) : null}
+          {message ? <div role="status" className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{message}</div> : null}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
+            <span className="text-xs text-slate-500">Target: {targetVm?.ipAddress ?? 'Select a deployed VM'} · TTL 300</span>
+            <div className="flex gap-2">
+              {application.domain ? (
+                <button
+                  type="button"
+                  disabled={Boolean(busy)}
+                  onClick={remove}
+                  className="inline-flex h-9 items-center gap-2 rounded border border-rose-300 px-3 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-45"
+                >
+                  {busy === 'remove' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  Remove domain
+                </button>
+              ) : null}
+              <button
+                type="button"
+                disabled={Boolean(busy) || !hostname.trim() || !profileId || !vmId}
+                onClick={save}
+                className="inline-flex h-9 items-center gap-2 rounded bg-slate-950 px-4 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {busy === 'save' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Globe2 className="h-4 w-4" />}
+                {application.domain ? 'Reconcile domain' : 'Configure domain'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Panel>
+
+      <div className="grid content-start gap-4">
+        <Panel title="DNS status" detail="Latest Name.com reconciliation result">
+          {application.domain ? (
+            <div className="grid gap-4 p-4 text-xs">
+              <div className="flex items-center justify-between gap-3">
+                <strong className="break-all text-sm text-slate-900">{application.domain.hostname}</strong>
+                <StatusBadge status={application.domain.dnsStatus} />
+              </div>
+              <dl className="grid gap-3">
+                <Definition label="Target VM" value={vms.find((vm) => vm.id === application.domain?.vmId)?.name ?? application.domain.vmId} />
+                <Definition label="Record type" value="A · TTL 300" mono />
+                {application.domain.dnsRecordId ? <Definition label="Grove-owned record ID" value={application.domain.dnsRecordId} mono /> : null}
+                <Definition label="Last update" value={formatDate(application.domain.updatedAt)} />
+                <Definition label="Detail" value={application.domain.dnsDetail ?? 'No detail available.'} />
+              </dl>
+            </div>
+          ) : <EmptyLine text="No application domain is configured." />}
+        </Panel>
+        <Panel title="Routing boundary" detail="What this DNS setting controls">
+          <p className="p-4 text-xs leading-5 text-slate-600">
+            Grove points the hostname to the selected VM. DNS cannot select an application port or provide TLS; expose this app through port 80/443 and configure HTTPS separately.
+          </p>
         </Panel>
       </div>
     </div>

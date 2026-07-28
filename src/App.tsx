@@ -68,8 +68,10 @@ import {
   rebootVm,
   refreshVm,
   relocateWorkspace,
+  removeApplicationDomain,
   planApplicationEnvironment,
   saveCopilotProvider,
+  saveApplicationDomain,
   sendCopilotMessage,
   setApiToken,
   syncApplicationSource,
@@ -92,6 +94,7 @@ import {
 import type {
   AlicloudCredentialCsvImport,
   AwsCredentialCsvImport,
+  ApplicationDomainInput,
   ApplicationEnvironmentInput,
   GroveApplication,
   GroveApplicationInput,
@@ -1540,6 +1543,18 @@ function App() {
     return result.lines
   }
 
+  async function saveSelectedApplicationDomain(input: ApplicationDomainInput) {
+    if (!selectedApplication) return
+    const application = await saveApplicationDomain(selectedApplication.id, input)
+    setApplications((current) => upsertById(current, application))
+  }
+
+  async function removeSelectedApplicationDomain() {
+    if (!selectedApplication) return
+    const application = await removeApplicationDomain(selectedApplication.id)
+    setApplications((current) => upsertById(current, application))
+  }
+
   function openApplicationVm(vmId: string) {
     setActiveSection('virtual-machines')
     selectScope(vmScope(vmId))
@@ -1775,6 +1790,8 @@ function App() {
           onDeploy={deploySelectedApplication}
           onLoadLogs={loadSelectedApplicationLogs}
           onOpenVm={openApplicationVm}
+          onSaveDomain={saveSelectedApplicationDomain}
+          onRemoveDomain={removeSelectedApplicationDomain}
           onCreateEnvironment={createEnvironment}
           onPlanEnvironment={planEnvironment}
           onApplyEnvironment={applyEnvironment}

@@ -58,5 +58,7 @@ export function telemetryValues(telemetry: VmOverviewTelemetry) {
 
 export function telemetrySourceLabel(telemetry: VmOverviewTelemetry) {
   if (telemetry.source === 'host') return 'SSH'
-  return telemetry.source === 'aws' ? 'CloudWatch + SSH' : 'CloudMonitor + SSH'
+  if (telemetry.source === 'aws') return 'CloudWatch + SSH'
+  if (telemetry.source === 'azure') return 'Azure Monitor + SSH'
+  return 'CloudMonitor + SSH'
 }

@@ -11,6 +11,7 @@ import type {
 } from '../src/types'
 import type { CredentialManager } from './credentialManager'
 import { AlicloudCloudAdapter } from './alicloudCloudAdapter'
+import { AzureCloudAdapter } from './azureCloudAdapter'
 import { AwsCloudAdapter } from './awsCloudAdapter'
 
 export interface CloudProviderContext {
@@ -48,6 +49,8 @@ export interface ProviderFirewallRule {
   toPort?: number
   source: string
   description?: string
+  removable: boolean
+  readOnlyReason?: string
 }
 
 export type ProviderMachineMetrics = Omit<CloudMachineMetrics, 'machineId'>
@@ -93,6 +96,8 @@ interface FirewallReference extends MachineReference {
 interface RuleReference extends FirewallReference {
   ruleNativeId: string
   direction: CloudFirewallRule['direction']
+  removable: boolean
+  readOnlyReason?: string
 }
 
 function opaqueId(prefix: string, ...parts: string[]) {
@@ -115,6 +120,7 @@ export class CloudProviderManager implements CloudControlService {
     credentials: CredentialManager,
     adapters: Partial<Record<CredentialProfileKind, CloudProviderAdapter>> = {
       aws: new AwsCloudAdapter(),
+      azure: new AzureCloudAdapter(),
       alicloud: new AlicloudCloudAdapter(),
     },
   ) {
@@ -226,11 +232,18 @@ export class CloudProviderManager implements CloudControlService {
         reference.context.profile.id,
         reference.machine.location,
         reference.machine.nativeId,
+        rule.firewallNativeId,
         rule.nativeId,
       )
       const firewallReference = { ...reference, firewallNativeId: rule.firewallNativeId }
       this.firewalls.set(firewallId, firewallReference)
-      this.rules.set(ruleId, { ...firewallReference, ruleNativeId: rule.nativeId, direction: rule.direction })
+      this.rules.set(ruleId, {
+        ...firewallReference,
+        ruleNativeId: rule.nativeId,
+        direction: rule.direction,
+        removable: rule.removable,
+        readOnlyReason: rule.readOnlyReason,
+      })
       return {
         id: ruleId,
         firewallId,
@@ -241,6 +254,8 @@ export class CloudProviderManager implements CloudControlService {
         toPort: rule.toPort,
         source: rule.source,
         description: rule.description,
+        removable: rule.removable,
+        readOnlyReason: rule.readOnlyReason,
       }
     })
   }
@@ -273,6 +288,9 @@ export class CloudProviderManager implements CloudControlService {
     }
     if (rule.direction !== 'ingress') {
       throw new Error('Only ingress firewall rules can be removed by Grove.')
+    }
+    if (!rule.removable) {
+      throw new Error(rule.readOnlyReason || 'This provider firewall rule is read-only in Grove.')
     }
     await machine.adapter.removeFirewallRule(
       machine.context,

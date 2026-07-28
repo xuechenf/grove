@@ -29,6 +29,8 @@ scripts/
 grove_accessKeys.csv
 *_accessKeys.csv
 *.csv
+namecomtoken.txt
+*namecom*token*.txt
 terraform.tfstate
 terraform.tfstate.*
 grove.db*

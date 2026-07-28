@@ -71,7 +71,7 @@ export function OverviewTab({ vm, telemetry, applications = [], loading = false,
       </section>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricTile label="CPU" value={`${values.cpuPercent}%`} detail={telemetry.source === 'host' ? `${currentVm.resources.cpuCores} cores · SSH` : telemetry.source === 'aws' ? 'CloudWatch' : 'CloudMonitor'} percent={values.cpuPercent} icon={<Cpu className="h-4 w-4" aria-hidden="true" />} />
+        <MetricTile label="CPU" value={`${values.cpuPercent}%`} detail={telemetry.source === 'host' ? `${currentVm.resources.cpuCores} cores · SSH` : telemetry.source === 'aws' ? 'CloudWatch' : telemetry.source === 'azure' ? 'Azure Monitor' : 'CloudMonitor'} percent={values.cpuPercent} icon={<Cpu className="h-4 w-4" aria-hidden="true" />} />
         <MetricTile label="Memory" value={`${currentVm.metrics.memoryPercent}%`} detail={`${currentVm.resources.memoryGb} GB · SSH`} percent={currentVm.metrics.memoryPercent} tone={currentVm.metrics.memoryPercent >= currentVm.metrics.thresholds.memoryWarning ? 'warning' : 'normal'} icon={<MemoryStick className="h-4 w-4" aria-hidden="true" />} />
         <MetricTile label="Disk" value={`${currentVm.metrics.diskPercent}%`} detail={`${currentVm.resources.diskGb} GB · SSH`} percent={currentVm.metrics.diskPercent} tone={currentVm.metrics.diskPercent >= currentVm.metrics.thresholds.diskWarning ? 'warning' : 'normal'} icon={<HardDrive className="h-4 w-4" aria-hidden="true" />} />
         <MetricTile label="Traffic now" value={`${rateLabel(values.networkInMbps)} / ${rateLabel(values.networkOutMbps)}`} detail="in / out · details in Monitoring" icon={<Network className="h-4 w-4" aria-hidden="true" />} />

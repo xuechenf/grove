@@ -192,6 +192,8 @@ export class AwsCloudAdapter implements CloudProviderAdapter {
                 rule.ReferencedGroupInfo?.GroupId ??
                 'unknown',
               description: rule.Description,
+              removable: !rule.IsEgress,
+              readOnlyReason: rule.IsEgress ? 'Outbound rules are read-only in Grove.' : undefined,
             })
           }
           nextToken = page.NextToken

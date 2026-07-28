@@ -3,6 +3,7 @@ import { initialMessages, initialProposals, initialTransfers, vms as fixtureVms 
 import type {
   ActionProposal,
   AlicloudCredentialCsvImport,
+  ApplicationDomainInput,
   ApplicationEnvironmentInput,
   AwsCredentialCsvImport,
   AppRunnerService,
@@ -41,6 +42,7 @@ import type {
 import { scopeVmId, vmScope } from '../src/types'
 import { loadAppRunnerServices, saveAppRunnerServices } from './appRunnerMetadata'
 import { ApplicationManager } from './applicationManager'
+import { ApplicationDomainManager, type ApplicationDnsProvider } from './applicationDomainManager'
 import { ApplicationWorkspace } from './applicationWorkspace'
 import { classifyCommand, isReadOnlyCommand } from './commandProfiles'
 import { installKimiCli } from './copilotInstall'
@@ -765,6 +767,7 @@ export interface GroveStoreOptions {
   credentialVault?: CredentialVault
   terraform?: TerraformExecutor
   cloudControl?: CloudControlService
+  applicationDns?: ApplicationDnsProvider
   database?: GroveDatabase
 }
 
@@ -823,6 +826,7 @@ export class GroveStore implements CopilotToolHost {
   private readonly mutationLock = new KeyedMutex()
   private readonly applicationWorkspace: ApplicationWorkspace
   private readonly applicationManager: ApplicationManager
+  private readonly applicationDomainManager: ApplicationDomainManager
   private readonly credentialManager: CredentialManager
   private readonly infrastructureManager: InfrastructureManager
   private readonly cloudProviderManager: CloudControlService
@@ -879,6 +883,15 @@ export class GroveStore implements CopilotToolHost {
       {
         onApplicationUpdated: (application) => this.publish({ type: 'application.updated', payload: application }),
         onDeploymentUpdated: (deployment) => this.publish({ type: 'deployment.updated', payload: deployment }),
+      },
+    )
+    this.applicationDomainManager = new ApplicationDomainManager(
+      this.applicationWorkspace,
+      this.credentialManager,
+      (vmId) => this.getVm(vmId),
+      {
+        dns: options.applicationDns,
+        onApplicationUpdated: (application) => this.publish({ type: 'application.updated', payload: application }),
       },
     )
     this.infrastructureManager = new InfrastructureManager(this.applicationWorkspace, this.credentialManager, {
@@ -1104,12 +1117,18 @@ export class GroveStore implements CopilotToolHost {
     return this.cloudProviderManager.listFirewallRules(machineId)
   }
 
-  addCloudFirewallRule(machineId: string, input: CloudFirewallRuleInput) {
-    return this.mutationLock.run(`cloud:${machineId}`, () => this.cloudProviderManager.addFirewallRule(machineId, input))
+  async addCloudFirewallRule(machineId: string, input: CloudFirewallRuleInput) {
+    this.cloudInventoryCache = undefined
+    const rules = await this.mutationLock.run(`cloud:${machineId}`, () => this.cloudProviderManager.addFirewallRule(machineId, input))
+    this.cloudInventoryCache = undefined
+    return rules
   }
 
-  removeCloudFirewallRule(machineId: string, ruleId: string) {
-    return this.mutationLock.run(`cloud:${machineId}`, () => this.cloudProviderManager.removeFirewallRule(machineId, ruleId))
+  async removeCloudFirewallRule(machineId: string, ruleId: string) {
+    this.cloudInventoryCache = undefined
+    const rules = await this.mutationLock.run(`cloud:${machineId}`, () => this.cloudProviderManager.removeFirewallRule(machineId, ruleId))
+    this.cloudInventoryCache = undefined
+    return rules
   }
 
   getCloudMachineMetrics(machineId: string, hours?: number) {
@@ -1126,7 +1145,7 @@ export class GroveStore implements CopilotToolHost {
       const cloudMachine = inventory.machines.find((machine) =>
         [machine.publicIp, machine.privateIp].some((ip) => ip && endpoints.has(ip)),
       )
-      if (cloudMachine && (cloudMachine.provider === 'aws' || cloudMachine.provider === 'alicloud')) {
+      if (cloudMachine && (cloudMachine.provider === 'aws' || cloudMachine.provider === 'azure' || cloudMachine.provider === 'alicloud')) {
         let cloudMetrics
         try {
           cloudMetrics = await this.getCloudMachineMetrics(cloudMachine.id, hours)
@@ -1136,7 +1155,9 @@ export class GroveStore implements CopilotToolHost {
         return {
           vm,
           source: cloudMachine.provider,
-          sourceLabel: cloudMachine.provider === 'aws' ? 'AWS EC2 + CloudWatch' : 'Alibaba Cloud ECS + CloudMonitor',
+          sourceLabel: cloudMachine.provider === 'aws'
+            ? 'AWS EC2 + CloudWatch'
+            : cloudMachine.provider === 'azure' ? 'Azure VM + Azure Monitor' : 'Alibaba Cloud ECS + CloudMonitor',
           sampledAt: cloudMetrics?.endTime ?? inventory.scannedAt,
           cloudMachine,
           cloudMetrics,
@@ -1202,6 +1223,18 @@ export class GroveStore implements CopilotToolHost {
 
   readApplicationLogs(applicationId: string, vmId: string, lines?: number) {
     return this.applicationManager.readApplicationLogs(applicationId, vmId, lines)
+  }
+
+  reconcileApplicationDomain(applicationId: string, input: ApplicationDomainInput) {
+    return this.mutationLock.run(`application-domain:${applicationId}`, () =>
+      this.applicationDomainManager.reconcile(applicationId, input),
+    )
+  }
+
+  removeApplicationDomain(applicationId: string) {
+    return this.mutationLock.run(`application-domain:${applicationId}`, () =>
+      this.applicationDomainManager.remove(applicationId),
+    )
   }
 
   terraformStatus() {

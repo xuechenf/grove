@@ -2,6 +2,7 @@ import type {
   ActionProposal,
   AlicloudCredentialCsvImport,
   AppSnapshot,
+  ApplicationDomainInput,
   ApplicationEnvironment,
   ApplicationEnvironmentInput,
   ApplicationDeployment,
@@ -275,6 +276,19 @@ export function getApplicationLogs(applicationId: string, vmId: string, lines = 
   return requestJson<{ vmId: string; lines: string[] }>(
     `/api/applications/${applicationId}/logs?vmId=${encodeURIComponent(vmId)}&lines=${lines}`,
   )
+}
+
+export function saveApplicationDomain(applicationId: string, input: ApplicationDomainInput) {
+  return requestJson<GroveApplication>(`/api/applications/${applicationId}/domain`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export function removeApplicationDomain(applicationId: string) {
+  return requestJson<GroveApplication>(`/api/applications/${applicationId}/domain`, {
+    method: 'DELETE',
+  })
 }
 
 export function getTerraformStatus() {

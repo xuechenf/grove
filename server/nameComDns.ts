@@ -1,5 +1,10 @@
-import type { ApplicationEnvironment } from '../src/types'
 import type { CredentialManager } from './credentialManager'
+
+export interface NameComDnsTarget {
+  nameComCredentialProfileId?: string
+  hostname?: string
+  dnsRecordId?: string
+}
 
 interface NameComRecord {
   id?: number | string
@@ -29,12 +34,12 @@ export class NameComDnsManager {
     this.credentials = credentials
   }
 
-  async reconcile(environment: ApplicationEnvironment, publicIp: string): Promise<NameComReconcileResult> {
-    if (!environment.nameComCredentialProfileId || !environment.hostname) {
+  async reconcile(target: NameComDnsTarget, publicIp: string): Promise<NameComReconcileResult> {
+    if (!target.nameComCredentialProfileId || !target.hostname) {
       throw new Error('Name.com profile and hostname are required.')
     }
-    const access = this.access(environment.nameComCredentialProfileId)
-    const hostname = environment.hostname.toLowerCase().replace(/\.$/, '')
+    const access = this.access(target.nameComCredentialProfileId)
+    const hostname = target.hostname.toLowerCase().replace(/\.$/, '')
     const domains = (await this.listAllPages<{ domainName?: string }>(access, '/domains', 'domains'))
       .map((domain) => domain.domainName?.toLowerCase())
       .filter((domain): domain is string => Boolean(domain))
@@ -51,8 +56,8 @@ export class NameComDnsManager {
       'records',
     )
     let existing: NameComRecord | undefined
-    if (environment.dnsRecordId) {
-      existing = records.find((record) => String(record.id) === environment.dnsRecordId)
+    if (target.dnsRecordId) {
+      existing = records.find((record) => String(record.id) === target.dnsRecordId)
       if (!existing) {
         throw new Error('The recorded Grove-owned Name.com record no longer exists. Reconcile it manually before retrying.')
       }
@@ -82,12 +87,12 @@ export class NameComDnsManager {
     return { recordId, detail: `${hostname} points to ${publicIp} with TTL 300.` }
   }
 
-  async remove(environment: ApplicationEnvironment) {
-    if (!environment.nameComCredentialProfileId || !environment.hostname || !environment.dnsRecordId) {
+  async remove(target: NameComDnsTarget) {
+    if (!target.nameComCredentialProfileId || !target.hostname || !target.dnsRecordId) {
       return
     }
-    const access = this.access(environment.nameComCredentialProfileId)
-    const hostname = environment.hostname.toLowerCase().replace(/\.$/, '')
+    const access = this.access(target.nameComCredentialProfileId)
+    const hostname = target.hostname.toLowerCase().replace(/\.$/, '')
     const domain = (await this.listAllPages<{ domainName?: string }>(access, '/domains', 'domains'))
       .map((item) => item.domainName?.toLowerCase())
       .filter((item): item is string => Boolean(item))
@@ -98,7 +103,7 @@ export class NameComDnsManager {
     }
     await this.request(
       access,
-      `/domains/${encodeURIComponent(domain)}/records/${encodeURIComponent(environment.dnsRecordId)}`,
+      `/domains/${encodeURIComponent(domain)}/records/${encodeURIComponent(target.dnsRecordId)}`,
       { method: 'DELETE' },
     )
   }

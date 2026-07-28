@@ -43,6 +43,7 @@ const ruleB: CloudFirewallRule = {
   fromPort: 443,
   toPort: 443,
   source: '0.0.0.0/0',
+  removable: true,
 }
 
 function metricsFor(machineId: string): CloudMachineMetrics {

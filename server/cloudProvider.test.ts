@@ -54,6 +54,22 @@ describe('Alibaba Cloud credential CSV import', () => {
   })
 })
 
+describe('Azure credential storage', () => {
+  it('keeps the client secret only in the credential vault', () => {
+    const { manager, vault } = credentialManager()
+    const profile = manager.create({
+      kind: 'azure',
+      name: 'Azure subscription',
+      configuration: { tenantId: 'tenant', clientId: 'client', subscriptionId: 'subscription' },
+      secrets: { clientSecret: 'TEST_ONLY_AZURE_SECRET' },
+    })
+
+    expect(profile.configuration).toEqual({ tenantId: 'tenant', clientId: 'client', subscriptionId: 'subscription' })
+    expect(JSON.stringify(profile)).not.toContain('TEST_ONLY_AZURE_SECRET')
+    expect(vault.get(profile.id)).toEqual({ clientSecret: 'TEST_ONLY_AZURE_SECRET' })
+  })
+})
+
 describe('provider-neutral cloud control', () => {
   it('uses opaque ids and exposes only the allowed existing-resource operations', async () => {
     const { manager } = credentialManager()
@@ -84,6 +100,7 @@ describe('provider-neutral cloud control', () => {
         fromPort: 22,
         toPort: 22,
         source: '0.0.0.0/0',
+        removable: true,
       }]),
       addFirewallRule: vi.fn().mockResolvedValue(undefined),
       removeFirewallRule: vi.fn().mockResolvedValue(undefined),
@@ -178,6 +195,7 @@ describe('provider-neutral cloud control', () => {
         fromPort: 22,
         toPort: 22,
         source: '0.0.0.0/0',
+        removable: true,
       }]),
       addFirewallRule: vi.fn().mockResolvedValue(undefined),
       removeFirewallRule: vi.fn().mockResolvedValue(undefined),
@@ -206,6 +224,37 @@ describe('provider-neutral cloud control', () => {
     }
     expect(adapter.addFirewallRule).toHaveBeenCalledTimes(2)
     expect(adapter.removeFirewallRule).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects removal of provider read-only rules before calling the adapter', async () => {
+    const { manager } = credentialManager()
+    const profile = manager.create({
+      kind: 'azure',
+      name: 'Azure account',
+      configuration: { tenantId: 'tenant', clientId: 'client', subscriptionId: 'subscription' },
+      secrets: { clientSecret: 'secret' },
+    })
+    const adapter = {
+      listMachines: vi.fn().mockResolvedValue({ warnings: [], machines: [{
+        nativeId: '/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm',
+        location: 'eastus', name: 'vm', state: 'running', firewalls: [{
+          nativeId: '/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/nsg', name: 'nsg',
+        }],
+      }] }),
+      listFirewallRules: vi.fn().mockResolvedValue([{
+        nativeId: 'AllowVnetInBound',
+        firewallNativeId: '/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/nsg',
+        firewallName: 'nsg', direction: 'ingress', protocol: 'all', source: 'VirtualNetwork', removable: false,
+        readOnlyReason: 'Azure default NSG rules cannot be removed.',
+      }]),
+      addFirewallRule: vi.fn(), removeFirewallRule: vi.fn(), getMetrics: vi.fn(), power: vi.fn(),
+    } as unknown as CloudProviderAdapter
+    const cloud = new CloudProviderManager(manager, { azure: adapter })
+    const machine = (await cloud.listMachines(profile.id)).machines[0]
+    const rule = (await cloud.listFirewallRules(machine.id))[0]
+
+    await expect(cloud.removeFirewallRule(machine.id, rule.id)).rejects.toThrow('Azure default NSG rules cannot be removed')
+    expect(adapter.removeFirewallRule).not.toHaveBeenCalled()
   })
 
   it('reports a successful power action even when the inventory refresh fails', async () => {

@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type {
   ActionProposal,
   AlicloudCredentialCsvImport,
+  ApplicationDomainInput,
   AppRunnerServiceInput,
   AwsCredentialCsvImport,
   CloudFirewallRuleInput,
@@ -87,6 +88,26 @@ const applicationDeploymentSchema = z.object({
   versionId: z.string().min(1),
   vmIds: z.array(z.string().min(1)).min(1),
   environment: z.string().trim().min(1).default('production'),
+})
+
+const hostnameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .transform((value) => value.replace(/\.$/, ''))
+  .refine(
+    (value) =>
+      value.length <= 253 &&
+      value.includes('.') &&
+      /[a-z]/.test(value.split('.').at(-1) ?? '') &&
+      value.split('.').every((label) => /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$/.test(label)),
+    { message: 'Enter a valid fully-qualified hostname, such as app.example.com.' },
+  )
+
+const applicationDomainSchema: z.ZodType<ApplicationDomainInput> = z.object({
+  hostname: hostnameSchema,
+  nameComCredentialProfileId: z.string().trim().min(1),
+  vmId: z.string().trim().min(1),
 })
 
 const infrastructurePlanSchema = z.object({ destroy: z.boolean().default(false) })
@@ -488,6 +509,28 @@ export function createGroveApp(store = new GroveStore(), options: CreateGroveApp
           vmId,
           Number.isFinite(lines) ? lines : undefined,
         ),
+      )
+    }),
+  )
+
+  app.put(
+    '/api/applications/:applicationId/domain',
+    asyncRoute(async (request, response) => {
+      const body = applicationDomainSchema.parse(request.body)
+      response.json(
+        await store.reconcileApplicationDomain(
+          requireParam(request.params.applicationId, 'applicationId'),
+          body,
+        ),
+      )
+    }),
+  )
+
+  app.delete(
+    '/api/applications/:applicationId/domain',
+    asyncRoute(async (request, response) => {
+      response.json(
+        await store.removeApplicationDomain(requireParam(request.params.applicationId, 'applicationId')),
       )
     }),
   )

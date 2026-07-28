@@ -9,6 +9,7 @@ import { ApplicationWorkspace } from './applicationWorkspace'
 import { MockSshSessionManager } from './sshSessionManager'
 import { GroveStore } from './store'
 import type { TerraformExecutor, TerraformPlanResult } from './terraformRunner'
+import type { ApplicationDnsProvider } from './applicationDomainManager'
 
 const originalUseFixtures = process.env.GROVE_USE_FIXTURES
 const temporaryDirectories: string[] = []
@@ -45,7 +46,7 @@ class MockTerraform implements TerraformExecutor {
   }
 }
 
-function createTestApp(terraform?: TerraformExecutor) {
+function createTestApp(terraform?: TerraformExecutor, applicationDns?: ApplicationDnsProvider) {
   const root = mkdtempSync(join(tmpdir(), 'grove-application-api-'))
   temporaryDirectories.push(root)
   const source = join(root, 'source')
@@ -55,7 +56,7 @@ function createTestApp(terraform?: TerraformExecutor) {
     settingsPath: join(root, 'state', 'settings.yaml'),
     workspacePath: join(root, 'workspace'),
   })
-  const store = new GroveStore(new MockSshSessionManager(), { applicationWorkspace: workspace, terraform })
+  const store = new GroveStore(new MockSshSessionManager(), { applicationWorkspace: workspace, terraform, applicationDns })
   return { ...createGroveApp(store), source }
 }
 
@@ -137,6 +138,68 @@ describe('application API', () => {
     const application = await request(app).get(`/api/applications/${created.body.id}`).expect(200)
     expect(application.body.deployments).toEqual([])
     expect(application.body.instances).toEqual([])
+  })
+
+  it('configures and removes a Name.com domain for a deployed VM', async () => {
+    const calls: Array<{ operation: string; hostname?: string; publicIp?: string; recordId?: string }> = []
+    const dns: ApplicationDnsProvider = {
+      async reconcile(target, publicIp) {
+        calls.push({ operation: 'reconcile', hostname: target.hostname, publicIp, recordId: target.dnsRecordId })
+        return { recordId: 'record-42', detail: `${target.hostname} points to ${publicIp} with TTL 300.` }
+      },
+      async remove(target) {
+        calls.push({ operation: 'remove', hostname: target.hostname, recordId: target.dnsRecordId })
+      },
+    }
+    const { app, source } = createTestApp(undefined, dns)
+    const created = await request(app)
+      .post('/api/applications')
+      .send({
+        name: 'Domain API',
+        source: { type: 'local', path: source },
+        configuration: {
+          artifactPath: 'dist',
+          startCommand: 'node index.js',
+          port: 8080,
+          healthCheckPath: '/healthz',
+          healthCheckTimeoutSeconds: 15,
+          environment: {},
+        },
+      })
+      .expect(201)
+    const built = await request(app).post(`/api/applications/${created.body.id}/builds`).expect(201)
+    await request(app)
+      .post(`/api/applications/${created.body.id}/deployments`)
+      .send({ versionId: built.body.id, vmIds: [fixtureVms[0]!.id], environment: 'production' })
+      .expect(201)
+
+    const configured = await request(app)
+      .put(`/api/applications/${created.body.id}/domain`)
+      .send({
+        hostname: 'App.Example.com.',
+        nameComCredentialProfileId: 'namecom-profile',
+        vmId: fixtureVms[0]!.id,
+      })
+      .expect(200)
+    expect(configured.body.domain).toMatchObject({
+      hostname: 'app.example.com',
+      dnsStatus: 'ready',
+      dnsRecordId: 'record-42',
+      vmId: fixtureVms[0]!.id,
+    })
+    expect(calls[0]).toMatchObject({
+      operation: 'reconcile',
+      hostname: 'app.example.com',
+      publicIp: fixtureVms[0]!.ipAddress,
+    })
+
+    const removed = await request(app).delete(`/api/applications/${created.body.id}/domain`).expect(200)
+    expect(removed.body.domain).toBeUndefined()
+    expect(calls[1]).toEqual({
+      operation: 'remove',
+      hostname: 'app.example.com',
+      recordId: 'record-42',
+    })
   })
 })
 

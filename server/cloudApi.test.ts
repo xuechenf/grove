@@ -102,4 +102,32 @@ describe('provider-neutral cloud API', () => {
       else process.env.GROVE_USE_FIXTURES = originalFixtures
     }
   })
+
+  it('returns Azure-backed Overview telemetry through the provider-neutral API', async () => {
+    const originalFixtures = process.env.GROVE_USE_FIXTURES
+    process.env.GROVE_USE_FIXTURES = 'true'
+    try {
+      const cloud = cloudService()
+      const store = new GroveStore(undefined, { cloudControl: cloud })
+      const vm = store.listVms()[0]
+      vi.mocked(cloud.listMachines).mockResolvedValue({
+        scannedAt: '2026-07-21T01:00:00.000Z', warnings: [], machines: [{
+          id: 'azure-machine-one', provider: 'azure', credentialProfileId: 'azure-credential', credentialProfileName: 'Azure subscription',
+          name: vm.name, location: 'eastus', state: 'running', publicIp: vm.connection.host, firewalls: [],
+        }],
+      })
+      vi.mocked(cloud.getMetrics).mockResolvedValue({
+        machineId: 'azure-machine-one', periodSeconds: 60, startTime: '2026-07-21T00:00:00.000Z', endTime: '2026-07-21T01:00:00.000Z', series: [],
+      })
+
+      const overview = (await request(createGroveApp(store).app).get(`/api/vms/${vm.id}/overview`).expect(200)).body
+
+      expect(overview.source).toBe('azure')
+      expect(overview.sourceLabel).toBe('Azure VM + Azure Monitor')
+      expect(cloud.getMetrics).toHaveBeenCalledWith('azure-machine-one', 1)
+    } finally {
+      if (originalFixtures === undefined) delete process.env.GROVE_USE_FIXTURES
+      else process.env.GROVE_USE_FIXTURES = originalFixtures
+    }
+  })
 })

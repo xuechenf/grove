@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID } from 'node:crypto'
 import type { CredentialProfile, CredentialProfileTestResult } from '../src/types'
+import { verifyAzureCapabilities } from './azureCloudAdapter'
 
 interface TestContext {
   profile: CredentialProfile
@@ -93,37 +94,17 @@ async function testAws({ profile, secrets }: TestContext) {
 }
 
 async function testAzure({ profile, secrets }: TestContext) {
-  const tenantId = profile.configuration.tenantId!
-  const tokenBody = new URLSearchParams({
-    client_id: profile.configuration.clientId!,
-    client_secret: secrets.clientSecret!,
-    grant_type: 'client_credentials',
-    scope: 'https://management.azure.com/.default',
-  })
-  const tokenResponse = await fetchChecked(
-    `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
-    { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: tokenBody },
-    'Azure',
-  )
-  const token = (await tokenResponse.json()) as { access_token?: string }
-  if (!token.access_token) {
-    throw new Error('Azure returned no access token.')
-  }
   const subscriptionId = profile.configuration.subscriptionId!
-  const subscriptionResponse = await fetchChecked(
-    `https://management.azure.com/subscriptions/${encodeURIComponent(subscriptionId)}?api-version=2022-12-01`,
-    { headers: { authorization: `Bearer ${token.access_token}` } },
-    'Azure',
-  )
-  const subscription = (await subscriptionResponse.json()) as {
-    displayName?: string
-    state?: string
-    subscriptionId?: string
-  }
-  const subscriptionName = subscription.displayName || subscriptionId
+  const capabilities = await verifyAzureCapabilities({ profile, secrets })
+  const metricDetail = capabilities.metricsVerified ? ' Azure Monitor metrics verified.' : ' No VM exists, so metrics were not queried.'
   return {
-    detail: `Azure subscription verified: ${subscriptionName}.`,
-    identity: { subscriptionId, subscriptionName, subscriptionState: subscription.state ?? 'unknown' },
+    detail: `Azure subscription access verified: ${capabilities.vmCount} VM${capabilities.vmCount === 1 ? '' : 's'} and ${capabilities.nsgCount} NSG${capabilities.nsgCount === 1 ? '' : 's'} readable.${metricDetail} Write permissions are checked when power or NSG actions are used.`,
+    identity: {
+      subscriptionId,
+      azureVmCount: String(capabilities.vmCount),
+      azureNsgCount: String(capabilities.nsgCount),
+      azureMetricsVerified: String(capabilities.metricsVerified),
+    },
   }
 }
 

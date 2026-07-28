@@ -15,7 +15,7 @@ vi.mock('../lib/api', () => ({
   removeCloudFirewallRule: (...args: unknown[]) => removeRule(...args),
 }))
 
-const initialRule: CloudFirewallRule = { id: 'rule-1', firewallId: 'sg-1', firewallName: 'web', direction: 'ingress', protocol: 'tcp', fromPort: 22, toPort: 22, source: '0.0.0.0/0' }
+const initialRule: CloudFirewallRule = { id: 'rule-1', firewallId: 'sg-1', firewallName: 'web', direction: 'ingress', protocol: 'tcp', fromPort: 22, toPort: 22, source: '0.0.0.0/0', removable: true }
 
 function telemetry(): VmOverviewTelemetry {
   const vm = vms[0]
@@ -41,5 +41,14 @@ describe('VM Settings', () => {
 
     await waitFor(() => expect(addRule).toHaveBeenCalledWith('machine-1', expect.objectContaining({ firewallId: 'sg-1', fromPort: 443, toPort: 443 })))
     expect(screen.getByText('tcp 443-443')).toBeInTheDocument()
+  })
+
+  it('shows provider default rules as read-only without a remove action', async () => {
+    listRules.mockResolvedValue([{ ...initialRule, id: 'azure-default', removable: false, readOnlyReason: 'Azure default NSG rules cannot be removed.' }])
+    const vmTelemetry = telemetry()
+    render(<SettingsTab vm={vmTelemetry.vm} telemetry={vmTelemetry} applications={[]} onRefreshCloud={() => undefined} onTestConnection={() => undefined} onEditVm={() => undefined} onOpenInfrastructure={() => undefined} onRemoveVm={() => undefined} />)
+
+    expect(await screen.findByText('Read only')).toHaveAttribute('title', 'Azure default NSG rules cannot be removed.')
+    expect(screen.queryByRole('button', { name: /Remove tcp 22-22 rule/ })).not.toBeInTheDocument()
   })
 })

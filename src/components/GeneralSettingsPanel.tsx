@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog'
 import {
   CheckCircle2,
+  Copy,
   Database,
   Folder,
   FileUp,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { azureIamCommands } from '../lib/azureIam'
 import { cx } from '../lib/format'
 import type {
   AlicloudCredentialCsvImport,
@@ -170,6 +172,8 @@ export function GeneralSettingsPanel({
   const [credentialDeletingId, setCredentialDeletingId] = useState<string>()
   const [credentialMessage, setCredentialMessage] = useState<string>()
   const [credentialImporting, setCredentialImporting] = useState(false)
+  const [azureSetupSuffix] = useState(() => Math.random().toString(36).slice(2, 10).padEnd(8, '0'))
+  const [azureCopyMessage, setAzureCopyMessage] = useState<string>()
   const awsCsvInputRef = useRef<HTMLInputElement>(null)
   const alicloudCsvInputRef = useRef<HTMLInputElement>(null)
 
@@ -265,6 +269,15 @@ export function GeneralSettingsPanel({
         [key]: value,
       },
     }))
+  }
+
+  async function copyAzureSetup() {
+    try {
+      await navigator.clipboard.writeText(azureIamCommands(credentialInput.configuration.subscriptionId ?? '', azureSetupSuffix))
+      setAzureCopyMessage('Commands copied.')
+    } catch {
+      setAzureCopyMessage('Copy failed. Select the commands manually.')
+    }
   }
 
   async function saveCredential() {
@@ -530,6 +543,27 @@ export function GeneralSettingsPanel({
                       </label>
                     ))}
                   </div>
+                  {credentialInput.kind === 'azure' ? (
+                    <section className="grid gap-2 rounded border border-blue-200 bg-blue-50 p-3" aria-label="Azure IAM setup">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <strong className="text-xs font-semibold text-blue-950">Azure service principal setup</strong>
+                          <p className="mt-1 text-xs leading-5 text-blue-800">Run these commands yourself in PowerShell. Grove never creates identities or role assignments.</p>
+                        </div>
+                        <button type="button" onClick={() => void copyAzureSetup()} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded border border-blue-300 bg-white px-2.5 text-xs font-medium text-blue-800 hover:bg-blue-100"><Copy className="h-3.5 w-3.5" />Copy</button>
+                      </div>
+                      <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">{azureIamCommands(credentialInput.configuration.subscriptionId ?? '', azureSetupSuffix)}</pre>
+                      <div className="grid gap-1 text-xs leading-5 text-blue-900">
+                        <span><strong>Monitoring Reader</strong> reads VM configuration and Azure Monitor metrics.</span>
+                        <span><strong>Virtual Machine Contributor</strong> starts, restarts, and deallocates VMs.</span>
+                        <span><strong>Network Contributor</strong> manages NSG ingress rules. Do not grant Owner.</span>
+                        <span>Map <code>$sp.tenant</code>, <code>$sp.appId</code>, and <code>$sp.password</code> to Tenant ID, Client ID, and Client secret. The secret is shown only once.</span>
+                        <span>Azure role propagation can take a minute. Retry a failed role assignment or credential test after 30–60 seconds.</span>
+                        <span>Client secrets are convenient for local use; use certificate or federated credentials for production automation.</span>
+                      </div>
+                      {azureCopyMessage ? <p className="text-xs font-medium text-blue-800" role="status">{azureCopyMessage}</p> : null}
+                    </section>
+                  ) : null}
                   <label className="inline-flex items-center gap-2 text-xs text-slate-600">
                     <input
                       type="checkbox"

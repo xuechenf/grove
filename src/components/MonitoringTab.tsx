@@ -32,7 +32,7 @@ export function MonitoringTab({ vm, telemetry, loading = false, onRefresh }: Mon
   const currentVm = telemetry.vm ?? vm
   const values = telemetryValues(telemetry)
   const statusCheckFailed = latestMetric(seriesFor(telemetry, 'statusCheckFailed'))
-  const cloudSource = telemetry.source === 'aws' ? 'CloudWatch' : telemetry.source === 'alicloud' ? 'CloudMonitor' : 'SSH'
+  const cloudSource = telemetry.source === 'aws' ? 'CloudWatch' : telemetry.source === 'azure' ? 'Azure Monitor' : telemetry.source === 'alicloud' ? 'CloudMonitor' : 'SSH'
 
   return (
     <div className="space-y-4" data-testid="monitoring-tab">

@@ -345,6 +345,7 @@ export class GroveDatabase {
         source: parseJson(row.source_json),
         managedSourcePath: String(row.managed_source_path),
         configuration: parseJson(row.configuration_json),
+        domain: row.domain_json ? parseJson(row.domain_json) : undefined,
         health: String(row.health) as GroveApplication['health'],
         activeVersionId: optionalText(row.active_version_id),
         createdAt: String(row.created_at),
@@ -363,12 +364,12 @@ export class GroveDatabase {
         .prepare(`
           INSERT INTO applications (
             id, position, slug, name, description, source_json, managed_source_path,
-            configuration_json, health, active_version_id, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            configuration_json, domain_json, health, active_version_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             position=excluded.position, slug=excluded.slug, name=excluded.name, description=excluded.description,
             source_json=excluded.source_json, managed_source_path=excluded.managed_source_path,
-            configuration_json=excluded.configuration_json, health=excluded.health,
+            configuration_json=excluded.configuration_json, domain_json=excluded.domain_json, health=excluded.health,
             active_version_id=excluded.active_version_id, updated_at=excluded.updated_at
         `)
         .run(
@@ -380,6 +381,7 @@ export class GroveDatabase {
           json(application.source),
           application.managedSourcePath,
           json(application.configuration),
+          application.domain ? json(application.domain) : null,
           application.health,
           application.activeVersionId ?? null,
           application.createdAt,
@@ -584,7 +586,7 @@ export class GroveDatabase {
       CREATE TABLE IF NOT EXISTS applications (
         id TEXT PRIMARY KEY, position INTEGER NOT NULL, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
         description TEXT, source_json TEXT NOT NULL, managed_source_path TEXT NOT NULL,
-        configuration_json TEXT NOT NULL, health TEXT NOT NULL, active_version_id TEXT,
+        configuration_json TEXT NOT NULL, domain_json TEXT, health TEXT NOT NULL, active_version_id TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       ) STRICT;
       CREATE TABLE IF NOT EXISTS application_versions (
@@ -653,6 +655,13 @@ export class GroveDatabase {
       CREATE INDEX IF NOT EXISTS idx_proposals_scope_time ON action_proposals(scope, created_at);
       INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, CURRENT_TIMESTAMP);
     `)
+    const applicationColumns = this.database.prepare('PRAGMA table_info(applications)').all() as SqlRow[]
+    if (!applicationColumns.some((column) => String(column.name) === 'domain_json')) {
+      this.database.exec('ALTER TABLE applications ADD COLUMN domain_json TEXT')
+    }
+    this.database.exec(
+      'INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, CURRENT_TIMESTAMP)',
+    )
   }
 
   private transaction<T>(operation: () => T): T {

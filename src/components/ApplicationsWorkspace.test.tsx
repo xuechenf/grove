@@ -56,6 +56,8 @@ function renderWorkspace(app: GroveApplication) {
     onDeploy: vi.fn().mockResolvedValue(undefined),
     onLoadLogs: vi.fn().mockResolvedValue([]),
     onOpenVm: vi.fn(),
+    onSaveDomain: vi.fn().mockResolvedValue(undefined),
+    onRemoveDomain: vi.fn().mockResolvedValue(undefined),
     onCreateEnvironment: vi.fn().mockResolvedValue(undefined),
     onPlanEnvironment: vi.fn().mockResolvedValue(undefined),
     onApplyEnvironment: vi.fn().mockResolvedValue(undefined),
@@ -126,5 +128,53 @@ describe('ApplicationsWorkspace deploy dialog', () => {
     // The new version shows up reactively in the version dropdown.
     const versionSelect = within(dialogAfter).getByRole('combobox')
     expect(within(versionSelect).getByRole('option', { name: 'v2 · v2' })).toBeInTheDocument()
+  })
+})
+
+describe('ApplicationsWorkspace domain settings', () => {
+  it('configures a Name.com hostname for a deployed VM', async () => {
+    const user = userEvent.setup()
+    const vm = vms[0]!
+    const app = application({
+      instances: [
+        {
+          vmId: vm.id,
+          status: 'healthy',
+          remotePath: '/srv/demo',
+          unitName: 'demo.service',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    })
+    const rendered = renderWorkspace(app)
+    rendered.rerender(
+      <ApplicationsWorkspace
+        {...rendered.props}
+        application={app}
+        credentialProfiles={[
+          {
+            id: 'namecom-1',
+            kind: 'name.com',
+            name: 'Name.com primary',
+            isDefault: true,
+            secretConfigured: true,
+            configuration: { username: 'operator' },
+            createdAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+          },
+        ]}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Domain' }))
+    await user.type(screen.getByLabelText('Fully-qualified hostname'), 'app.example.com')
+    await user.click(screen.getByRole('button', { name: 'Configure domain' }))
+
+    expect(rendered.props.onSaveDomain).toHaveBeenCalledWith({
+      hostname: 'app.example.com',
+      nameComCredentialProfileId: 'namecom-1',
+      vmId: vm.id,
+    })
+    expect(await screen.findByRole('status')).toHaveTextContent('Name.com DNS is configured.')
   })
 })

@@ -110,7 +110,10 @@ export function CloudMachinesPanel() {
   }, [selectedId])
 
   async function power(action: CloudMachinePowerAction) {
-    if (!selected || !window.confirm(`${action[0].toUpperCase()}${action.slice(1)} ${selected.name}?`)) return
+    const azureDeallocateWarning = selected?.provider === 'azure' && action === 'stop'
+      ? '\n\nAzure will deallocate this VM. A dynamically assigned public IP may change when it starts again.'
+      : ''
+    if (!selected || !window.confirm(`${action[0].toUpperCase()}${action.slice(1)} ${selected.name}?${azureDeallocateWarning}`)) return
     setMutating(true)
     setError(undefined)
     try {
@@ -141,7 +144,7 @@ export function CloudMachinesPanel() {
   }
 
   async function removeRule(rule: CloudFirewallRule) {
-    if (!selected || !window.confirm(`Remove ${formatFirewallRule(rule)} from ${rule.source}?`)) return
+    if (!selected || !rule.removable || !window.confirm(`Remove ${formatFirewallRule(rule)} from ${rule.source}?`)) return
     setMutating(true)
     setError(undefined)
     try {
@@ -238,7 +241,7 @@ export function CloudMachinesPanel() {
                       <span className={`rounded px-1.5 py-0.5 ${rule.direction === 'ingress' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>{rule.direction}</span>
                       <span className="font-mono text-slate-700">{formatFirewallRule(rule)}</span>
                       <span className="min-w-0 flex-1 truncate text-slate-500">{rule.source} · {rule.firewallName}</span>
-                      {rule.direction === 'ingress' ? <button type="button" aria-label={`Remove ${formatFirewallRule(rule)} rule`} disabled={mutating} onClick={() => void removeRule(rule)} className="rounded p-1 text-rose-600 hover:bg-rose-50 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" /></button> : null}
+                      {rule.removable ? <button type="button" aria-label={`Remove ${formatFirewallRule(rule)} rule`} disabled={mutating} onClick={() => void removeRule(rule)} className="rounded p-1 text-rose-600 hover:bg-rose-50 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" /></button> : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500" title={rule.readOnlyReason}>Read only</span>}
                     </div>
                   )) : <p className="px-2 py-3 text-xs text-slate-500">No firewall rules returned.</p>}
                 </div>

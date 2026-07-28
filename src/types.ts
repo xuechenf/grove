@@ -314,6 +314,22 @@ export interface ApplicationEnvironment {
   operations: InfrastructureOperation[]
 }
 
+export interface ApplicationDomainInput {
+  /** Fully-qualified hostname managed through Name.com, for example api.example.com. */
+  hostname: string
+  nameComCredentialProfileId: string
+  /** An existing VM where this application has been deployed. */
+  vmId: string
+}
+
+export interface ApplicationDomain extends ApplicationDomainInput {
+  dnsStatus: 'pending' | 'ready' | 'failed'
+  /** Exact Name.com record ID created by Grove; used to prevent deleting unrelated records. */
+  dnsRecordId?: string
+  dnsDetail?: string
+  updatedAt: string
+}
+
 export type ApplicationHealth = 'healthy' | 'degraded' | 'failed' | 'unknown' | 'not_deployed'
 
 export interface GroveApplication {
@@ -333,6 +349,7 @@ export interface GroveApplication {
   deployments: ApplicationDeployment[]
   instances: ApplicationInstance[]
   environments: ApplicationEnvironment[]
+  domain?: ApplicationDomain
 }
 
 export type CredentialProfileKind = 'ssh' | 'aws' | 'azure' | 'alicloud' | 'name.com'
@@ -435,6 +452,10 @@ export interface CloudFirewallRule {
   toPort?: number
   source: string
   description?: string
+  /** Whether Grove can safely remove this provider rule. */
+  removable: boolean
+  /** Human-readable explanation shown when a provider rule is read-only. */
+  readOnlyReason?: string
 }
 
 export interface CloudFirewallRuleInput {
@@ -466,7 +487,7 @@ export interface CloudMachineMetrics {
   series: CloudMetricSeries[]
 }
 
-export type VmTelemetrySource = 'aws' | 'alicloud' | 'host'
+export type VmTelemetrySource = 'aws' | 'azure' | 'alicloud' | 'host'
 
 /** One VM Overview response, using provider APIs when Grove can match the VM by IP. */
 export interface VmOverviewTelemetry {

@@ -56,4 +56,21 @@ describe('VM telemetry tabs', () => {
     expect(screen.getByTestId('overview-tab')).toHaveTextContent('Host managed')
     expect(screen.getByTestId('overview-tab')).toHaveTextContent('SSH')
   })
+
+  it('labels Azure VM and network metrics as Azure Monitor data', () => {
+    const telemetry = awsTelemetry()
+    const azureTelemetry = {
+      ...telemetry,
+      source: 'azure',
+      sourceLabel: 'Azure VM + Azure Monitor',
+      cloudMachine: { ...telemetry.cloudMachine!, provider: 'azure', location: 'eastus' },
+      cloudMetrics: { ...telemetry.cloudMetrics!, series: telemetry.cloudMetrics!.series.filter((series) => series.key !== 'statusCheckFailed') },
+    } satisfies VmOverviewTelemetry
+
+    render(<MonitoringTab vm={azureTelemetry.vm} telemetry={azureTelemetry} />)
+
+    expect(screen.getByTestId('monitoring-tab')).toHaveTextContent('Azure Monitor + SSH')
+    expect(screen.getAllByText('Azure Monitor').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/EC2 status check/)).not.toBeInTheDocument()
+  })
 })

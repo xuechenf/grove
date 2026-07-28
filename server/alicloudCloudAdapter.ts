@@ -203,11 +203,12 @@ export class AlicloudCloudAdapter implements CloudProviderAdapter {
       const permissions = nestedList(response, 'Permissions', 'Permission')
       for (const [index, permission] of permissions.entries()) {
         const direction = stringValue(permission.Direction)?.toLowerCase() === 'egress' ? 'egress' : 'ingress'
+        const nativeId = stringValue(permission.SecurityGroupRuleId) || `${firewall.nativeId}:${direction}:${index}`
         const source = direction === 'egress'
           ? stringValue(permission.DestCidrIp) || stringValue(permission.Ipv6DestCidrIp)
           : stringValue(permission.SourceCidrIp) || stringValue(permission.Ipv6SourceCidrIp)
         output.push({
-          nativeId: stringValue(permission.SecurityGroupRuleId) || `${firewall.nativeId}:${direction}:${index}`,
+          nativeId,
           firewallNativeId: firewall.nativeId,
           firewallName,
           direction,
@@ -215,6 +216,10 @@ export class AlicloudCloudAdapter implements CloudProviderAdapter {
           ...parsePortRange(stringValue(permission.PortRange)),
           source: source || stringValue(permission.SourceGroupId) || stringValue(permission.DestGroupId) || 'unknown',
           description: stringValue(permission.Description),
+          removable: direction === 'ingress' && !nativeId.includes(':'),
+          readOnlyReason: direction === 'egress'
+            ? 'Outbound rules are read-only in Grove.'
+            : nativeId.includes(':') ? 'Alibaba Cloud did not return a removable rule identifier.' : undefined,
         })
       }
     }
