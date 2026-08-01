@@ -1,50 +1,38 @@
-# Design: Refresh VM IP Address
+# Design: Rotate VM Public IP Address
 
 Status: design proposal (no code changes yet)
-Date: 2025 (task tsk_6UaUSQK6qaljsoEbXHnY)
+Date: 2025 (task tsk_FOD5AxemfyYNeKyDlaXm)
 
 ## 1. Problem statement
 
-A managed VM's IP address can change out from under Grove: cloud VMs without an
-elastic/static IP get a new public IP on stop/start, and DHCP-assigned lab machines
-can move. Today the VM's address is frozen in two places:
+Sometimes the operator *wants* a fresh public IP deliberately — e.g., the current one is blocklisted or targeted. Grove cannot do this today: the operator must use the cloud console to disassociate and release the old public IP, allocate a new one, associate it with the VM, and then fix Grove's stored connection by hand.
 
-- `VmConfig.host` in `inventory.yaml` (source of truth for the SSH connection), and
-- `VM.ipAddress` / `VM.connection.host` derived from it via `vmFromConfig()`
-  (`server/inventory.ts`).
-
-The only way to fix a stale address is to hand-edit the connection profile
-(`PATCH /api/vms/:vmId` → `store.updateVm`). Grove already knows the *current* IP
-in many cases: `CloudControlService.listMachines()` returns `ProviderMachine`
-records with `publicIp` / `privateIp` for every credential profile, and
-`store.getVmOverview()` already matches a VM to its cloud machine by IP
-(`server/store.ts` ~1144). We should turn that match into a one-click (and
-copilot-callable) "Refresh IP address" feature.
+This feature adds a **"Rotate IP"** button that performs the whole rotation in one action against the cloud provider: **remove** the current public IP from the VM (disassociate it from the instance's network interface), **delete** (release) that public IP so it returns to the provider's pool, **create** a new public IP from the provider's dynamic pool, and **attach** it to the VM — then update Grove's stored connection profile.
 
 ## 2. Goals / non-goals
 
 **In scope**
 
-- A `POST /api/vms/:vmId/refresh-ip` endpoint that re-resolves the VM's current
-  public IP and updates the stored connection profile atomically.
-- Matching order: (a) explicit cloud-machine link if configured, (b) cloud
-  inventory match by instance name, (c) legacy match by current/old IP.
-- UI: "Refresh IP" action on the VM detail page showing old → new IP and failure
-  reasons; disabled with an explanation when the VM can't be resolved to a cloud
-  machine.
-- An MCP tool so the copilot can refresh an IP when SSH starts failing.
-- Activity-log entry recording old IP, new IP, and resolution source.
+- A `POST /api/vms/:vmId/rotate-ip` endpoint that executes the full
+  remove → delete → create → attach sequence via the cloud adapter, then
+  updates the stored connection atomically.
+- UI: "Rotate IP" button on the VM detail page with a confirmation dialog
+  (the old IP is released permanently and active SSH sessions drop), a
+  progress state, and an old → new IP result.
+- An MCP tool so the copilot can rotate an IP when asked, gated like other
+  destructive mutating tools.
+- Activity-log entry recording old IP, new IP, and provider.
 - Correct handling of the SSH session cache (drop cached connections on host
   change — `updateVm` already does this via `ssh.closeVmConnection`).
 
 **Out of scope**
 
-- Automatic background IP watching/polling or push-based updates.
-- Updating application DNS records that point at the old IP (noted as follow-up;
-  `applicationDomainManager` reconcile already exists).
-- Private-IP-only refreshes for VPC-internal VMs (first cut refreshes `publicIp`;
-  fallback to `privateIp` only when no public IP exists).
-- Provider-specific "allocate elastic IP" flows.
+- Rotating *private* IPs or VPC-internal addressing.
+- Static/elastic IP inventory management: v1 allocates from the provider's
+  standard dynamic public-IP pool.
+- Updating application DNS records that point at the old IP (noted as
+  follow-up; `applicationDomainManager` reconcile already exists).
+- Automatic or scheduled rotation.
 
 ## 3. Current-state trace
 
@@ -52,64 +40,80 @@ copilot-callable) "Refresh IP address" feature.
   single, tested write path for changing a VM's host: it validates, enforces
   endpoint uniqueness (`assertUniqueEndpoint`), closes the cached SSH session on
   host/port/user/key change, persists `inventory.yaml` atomically via
-  `saveInventory`, and logs an activity event. **The refresh feature must reuse
-  this path rather than mutating configs directly.**
-- `CloudControlService.listMachines(profileId?)` (`server/cloudProvider.ts`)
-  aggregates `ProviderMachine` records across credential profiles and adapters
-  (AWS, Azure, Alibaba), each carrying `nativeId`, `name`, `state`, `publicIp`,
-  `privateIp`.
-- `getVmOverview` already implements an IP-set match between a VM and cloud
-  machines; that matching logic is the natural seed for the resolver but needs
-  to be hardened (see §5) because IP-based matching breaks precisely when the IP
-  has *changed* — which is exactly when the user needs this feature.
-- `CloudMachine` ids are stable hashes (`createHash` in `cloudProvider.ts`), so a
-  stored link survives restarts.
+  `saveInventory`, and logs an activity event. **The rotation feature must reuse
+  this path for the final host update rather than mutating configs directly.**
+- `CloudControlService` (`server/cloudProvider.ts`) aggregates provider
+  adapters (AWS, Azure, Alibaba) behind credential profiles and exposes
+  `ProviderMachine` records (`nativeId`, `name`, `state`, `publicIp`,
+  `privateIp`) via `listMachines()`. Adapters already implement mutating power
+  operations (start/stop/reboot); per-provider public-IP lifecycle operations
+  follow the same pattern.
+- `getVmOverview` matches a VM to its cloud machine by IP
+  (`server/store.ts` ~1144); that match identifies the target machine for
+  rotation. Matching must be hardened because the stored IP is exactly the
+  thing being replaced — see §4.2.
 
 ## 4. Proposed design
 
-### 4.1 Data model
+### 4.1 Provider adapter API
 
-Add an optional link on the VM config so resolution doesn't depend on matching
-the (possibly stale) IP:
+Extend the provider adapter interface with public-IP lifecycle operations:
 
 ```ts
-// src/types.ts — VmConfig
-cloudLink?: {
-  profileId: string     // credential profile that owns the machine
-  machineNativeId: string // provider instance id (stable across IP changes)
+interface ProviderAdapter {
+  // ... existing operations ...
+  detachPublicIp(profile, machineNativeId, publicIp): Promise<void>
+  releasePublicIp(profile, publicIpOrAllocationId): Promise<void>
+  allocatePublicIp(profile, machineNativeId): Promise<{ publicIp: string }>
+  attachPublicIp(profile, machineNativeId, allocation): Promise<void>
 }
 ```
 
-- Persisted in `inventory.yaml` via the existing `vmConfigSchema`
-  (`server/inventory.ts`) — add an optional strict object; old files without it
-  still parse (backward compatible, no migration needed).
-- Populated lazily: the first successful refresh (by any match strategy) writes
-  the link, so subsequent refreshes are deterministic.
+Per-provider mapping:
 
-### 4.2 Resolution strategy (server, `store.refreshVmIp(vmId)`)
+- **AWS**: disassociate + release the Elastic IP, allocate a new one, associate
+  it. Auto-assigned (non-EIP) dynamic public IPs can only be swapped by
+  stop/start — v1 fails with `not_supported` rather than power-cycling the
+  user's VM implicitly; Elastic IPs are the supported AWS path.
+- **Azure**: disassociate the public IP resource from the NIC, delete the
+  public IP resource, create a new dynamic public IP, associate it.
+- **Alibaba**: equivalent EIP disassociate / release / allocate / associate
+  flow.
+
+Unsupported provider or IP type → explicit `not_supported` error, never a
+silent partial operation.
+
+### 4.2 Rotation flow (server, `store.rotateVmPublicIp(vmId)`)
 
 1. Load VM + config; require it exists.
-2. Call `listCloudMachines()` once; collect `warnings`.
-3. Resolve the cloud machine:
-   1. If `config.cloudLink` → find machine with that `nativeId` under that
-      profile. If not found → **fail with `cloud_link_stale`** (do not silently
-      re-match by name/IP; surface that the machine may be terminated).
-   2. Else match by name (case-insensitive, exact) across machines whose
-      profile provider equals `vm.provider.name` when set; require exactly one
-      candidate.
-   3. Else legacy match: current `vm.ipAddress` / `connection.host` ∈
-      {`publicIp`, `privateIp`} — same rule as `getVmOverview`.
-   4. Zero or multiple candidates → fail with `no_match` / `ambiguous_match`
-      plus enough context (candidate names) for the UI to render guidance.
-4. Pick the new IP: `publicIp ?? privateIp`; if neither → fail `no_ip`
-   (e.g., machine stopped and IP released).
-5. If new IP equals current host → return `unchanged` (idempotent; no write, no
-   activity spam).
-6. Otherwise call `this.updateVm(vmId, { ...currentConnection, ipAddress: newIp })`
-   so all existing invariants (uniqueness, session-cache invalidation,
-   persistence, activity log) apply. Persist `cloudLink` in the same config
-   write.
-7. Return `{ vm, previousIp, newIp, source: 'link' | 'name' | 'ip', warnings }`.
+2. Resolve the cloud machine via `listCloudMachines()`: match by current
+   `vm.ipAddress` / `connection.host` against `publicIp`/`privateIp` (same
+   rule as `getVmOverview`), plus an exact name match as fallback. Zero or
+   multiple candidates → fail `no_match` / `ambiguous_match` with candidate
+   names for UI guidance.
+3. Require the machine's current `publicIp` to equal the stored host; if they
+   already diverge, fail `stale_host` and tell the user to fix the connection
+   first — never rotate an address Grove isn't using.
+4. Execute the rotation via the adapter, in order:
+   1. `detachPublicIp(oldIp)` — remove the IP from the VM.
+   2. `releasePublicIp(oldIp)` — delete it back to the provider pool.
+   3. `allocatePublicIp()` → `newIp` — create a new public IP.
+   4. `attachPublicIp(newIp)` — attach it to the VM.
+5. Only after the provider confirms the new IP is attached, call
+   `this.updateVm(vmId, { ...currentConnection, ipAddress: newIp })` so all
+   existing invariants (uniqueness, session-cache invalidation, persistence,
+   activity log) apply in one write.
+6. Return `{ vm, previousIp, newIp, warnings }`.
+
+**Mid-sequence failure handling.** The risky window is a failure after detach
+but before attach, leaving the VM with no public IP:
+
+- On any step failure the service attempts best-effort recovery (re-attach the
+  old IP if it wasn't released yet, or attach the newly allocated one).
+- The error always states which step failed and the VM's current known IP
+  state, so the UI can render actionable guidance.
+- `inventory.yaml` is only written after the provider confirms the new IP is
+  attached; a failed rotation never changes Grove's config.
 
 **State / failure table**
 
@@ -118,103 +122,112 @@ cloudLink?: {
 | VM unknown | 404 (existing `requireVm`) |
 | Cloud discovery failed (credentials, network) | 502 with adapter warnings; VM untouched |
 | No / ambiguous cloud machine | 409 `no_match` / `ambiguous_match`; VM untouched |
-| Linked machine gone | 409 `cloud_link_stale`; VM untouched |
-| Machine has no IP (stopped) | 409 `no_ip`; VM untouched |
-| IP unchanged | 200 `unchanged: true` |
-| Success | 200, updated `VM`, activity event |
-
-Unknown remote state is never guessed: any resolution doubt is an explicit
-failure, never a silent write.
+| Stored host ≠ machine publicIp | 409 `stale_host`; VM untouched |
+| Provider/IP type unsupported (e.g. AWS auto-assigned) | 409 `not_supported`; VM untouched |
+| Rotation failed mid-sequence | 502 `rotate_failed` with `failedStep` and recovery outcome; config untouched unless the new IP is confirmed attached |
+| Success | 200, updated `VM`, activity event with old → new IP |
 
 ### 4.3 API
 
 ```
-POST /api/vms/:vmId/refresh-ip
-→ 200 { vm, previousIp, newIp, unchanged, source, warnings }
+POST /api/vms/:vmId/rotate-ip
+→ 200 { vm, previousIp, newIp, warnings }
 → 409 { error: { code, message, candidates? } }
-→ 502 { error: { code: 'cloud_unavailable', warnings } }
+→ 502 { error: { code: 'rotate_failed' | 'cloud_unavailable', failedStep?, message, warnings } }
 ```
 
 - Registered in `server/app.ts` next to the other `/api/vms/:vmId/*` routes,
-  behind the existing API-token auth and `mutationLock` (it mutates inventory,
-  like `updateVm`).
-- Request body: none for v1 (optional `{ prefer: 'public' | 'private' }` later).
+  behind the existing API-token auth and `mutationLock` (it mutates both
+  cloud state and inventory).
+- No request body for v1.
 
 ### 4.4 Frontend
 
-- VM detail header, next to the connection info: "Refresh IP" button with a
-  spinner state. On success show a transient confirmation `1.2.3.4 → 5.6.7.8`
-  and the store's updated VM replaces local state (same pattern as the existing
-  `updateVm` form save).
-- On 409 show the error code's message; on `ambiguous_match` list candidate
-  machine names so the user can rename or link manually.
-- The IP shown elsewhere (`vm.ipAddress`, overview, terminal banner) updates for
-  free because everything derives from the single stored VM.
+- VM detail header: "Rotate IP" button opening a **confirmation dialog** that
+  warns: the current public IP will be released permanently, active SSH
+  sessions will drop, and DNS pointing at the old IP must be updated manually.
+  Confirm → spinner while the multi-step provider call runs.
+- On success show a transient confirmation `203.0.113.10 → 203.0.113.77`;
+  the store's updated VM replaces local state (same pattern as the existing
+  `updateVm` form save), so the IP shown everywhere updates for free.
+- On `rotate_failed` show which step failed and the recovery outcome (e.g.
+  "old IP re-attached" or "VM currently has no public IP — attach one from
+  the cloud console").
 
 ### 4.5 MCP / copilot
 
 Add one scoped tool in `server/mcp/tools.ts`:
 
 ```
-refresh_vm_ip { vmId } → { previousIp, newIp, unchanged } | structured error
+rotate_vm_public_ip { vmId } → { previousIp, newIp } | structured error
 ```
 
-Policy: this is a *mutating* tool — gate it like the existing
-firewall/power tools in `copilotPolicy` (require the cloud/VM mutation scope),
-and journal it in the copilot journal with old/new IP.
+Policy: this is a *destructive, mutating* tool — gate it in `copilotPolicy`
+with the cloud/VM mutation scope (like the existing firewall/power tools),
+require explicit user confirmation, and journal it in the copilot journal
+with old/new IP.
 
 ### 4.6 Concurrency & idempotency
 
-- Refresh is idempotent (re-running with no change is a no-op) and safe under
-  the existing mutation lock; concurrent refresh + `updateVm` serializes the
-  same way other inventory writes do.
-- `listCloudMachines` is read-only and may be slow (multi-provider fan-out);
-  the endpoint should have a reasonable timeout and surface per-profile
-  warnings instead of failing wholesale when one provider errors.
+- Rotation is **not** idempotent (each run allocates a fresh IP); it
+  serializes under the existing mutation lock with other inventory/cloud
+  mutations so concurrent rotate + `updateVm` cannot interleave.
+- Provider calls are slow multi-step operations; the endpoint needs a
+  generous timeout and must surface per-step failure detail rather than a
+  bare 500.
 
 ## 5. Key tradeoffs
 
-- **Name matching is heuristic.** Matching by VM name when no link exists can
-  hit duplicates. Mitigated by requiring a unique candidate and failing
-  loudly with `ambiguous_match` rather than guessing. Once a refresh succeeds,
-  the persisted `cloudLink` removes the heuristic from then on.
-- **Reuse `updateVm` vs. a dedicated write path.** Reusing `updateVm` keeps one
-  write path (uniqueness checks, session invalidation, persistence, activity).
-  The cost is a slightly awkward "build a VmConnectionInput from the existing
-  config" step — accepted, it keeps invariants in one place.
-- Alternative considered: a periodic background poller that auto-heals IPs.
-  Rejected for v1 — silent host changes are a security-sensitive event (SSH
-  host-key/fingerprint implications); the user (or copilot) should trigger the
-  change explicitly and see it in the activity log.
+- **Destructive by design.** Releasing the old IP is permanent; the provider
+  pool will not give it back. Mitigated by the confirmation dialog, the
+  copilot confirmation gate, and the activity-log audit trail.
+- **Four-step sequence vs. provider one-shot swap.** The explicit
+  detach/release/allocate/attach sequence works across providers whose APIs
+  lack a single swap call. The cost is a mid-sequence failure window —
+  mitigated by best-effort recovery and precise error reporting (§4.2).
+- **Reuse `updateVm` for the final host write.** Keeps one write path
+  (uniqueness checks, SSH session invalidation, persistence, activity log)
+  instead of a parallel mutation path.
+- **AWS auto-assigned public IPs are out of scope for v1** — the only swap is
+  stop/start, and silently power-cycling a user's VM is unacceptable.
+  Surface `not_supported` and document Elastic IPs as the supported AWS path.
 
 ## 6. Security notes
 
-- A refreshed IP changes where Grove opens SSH sessions. After refresh,
-  `connection.testStatus` resets to `idle` and the fingerprint from the old host
-  must not be carried over as "trusted" — `updateVm` already rebuilds the
-  connection from `vmFromConfig` and only preserves `lastConnected`/test fields
-  deliberately; keep the fingerprint reset behavior and verify it in tests.
-- No secrets are involved: cloud calls use the existing credential vault; the
-  endpoint returns IPs only.
-- Rate-limit nothing new; reuse API token auth. Log old→new IP in the activity
-  feed for auditability.
+- The new IP changes where Grove opens SSH sessions. After rotation,
+  `connection.testStatus` resets to `idle` and the previous host's SSH
+  fingerprint must not be carried over as trusted — `updateVm` already
+  rebuilds the connection from `vmFromConfig`; keep the fingerprint reset
+  behavior and verify it in tests.
+- No new secrets: cloud calls use the existing credential vault; the endpoint
+  returns IPs only.
+- The old IP is released to a shared pool and may be handed to another
+  tenant — the activity entry records old → new for auditability, and nothing
+  treats the old IP as "ours" after release.
+- Rate-limit nothing new; reuse API token auth and the mutation lock.
 
 ## 7. Testing plan
 
-- `server` unit tests (vitest, alongside `store`/`cloudApi` tests):
-  - refresh with linked machine → host updated, inventory persisted, SSH cache
-    close invoked, activity event written.
-  - match-by-name success; duplicate names → `ambiguous_match`.
-  - stale link → `cloud_link_stale`, inventory untouched.
-  - machine without public IP → `no_ip`; unchanged IP → no write.
-  - provider failure → 502 with warnings.
-  - fingerprint/testStatus reset after refresh.
-- API test through `app.ts` for route wiring, auth, and error-shape mapping.
-- MCP tool test mirroring the existing cloud tool tests (`cloudMcp.test.ts`).
-- Frontend: component test for the button states (loading/success/409).
+- `server` unit tests (vitest, alongside `store`/`cloudApi` tests) with a
+  fake adapter:
+  - happy path: detach/release/allocate/attach called in order, host updated,
+    inventory persisted, SSH cache close invoked, activity event written.
+  - adapter without support → `not_supported`, no provider calls made.
+  - ambiguous / no machine match → 409, no provider calls made.
+  - stored host ≠ machine publicIp → `stale_host`.
+  - failure at each step → correct `failedStep`, recovery attempted, config
+    untouched (unless the new IP is confirmed attached).
+  - fingerprint/testStatus reset after rotation.
+- API test through `app.ts` for route wiring, auth, mutation lock, and
+  error-shape mapping.
+- MCP tool test mirroring the existing cloud tool tests (`cloudMcp.test.ts`),
+  including the confirmation gate.
+- Frontend: component tests for the confirmation dialog, progress, success,
+  and mid-sequence failure rendering.
 
 ## 8. Rollout / rollback
 
-Purely additive: new optional schema field, one endpoint, one MCP tool, one UI
-button. Rollback = revert; existing inventories without `cloudLink` are
-unaffected.
+Additive: new adapter methods, one endpoint, one MCP tool, one UI button.
+Rollback = revert. Note that a completed rotation itself cannot be rolled
+back (the old IP is gone) — this is inherent to the feature and is why the
+confirmation UX exists.
